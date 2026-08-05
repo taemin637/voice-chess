@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -52,6 +53,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         "Rook", "Knight", "Bishop", "Queen", "King", "Bishop", "Knight", "Rook"
     };
 
+    private readonly GameObject[,] spawnedPieces = new GameObject[8, 8];
+
     [Header("Piece Prefabs")]
     [SerializeField] private ChessPiecePrefabSet whitePieces = new();
     [SerializeField] private ChessPiecePrefabSet blackPieces = new();
@@ -75,6 +78,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     [SerializeField, Min(0.001f)] private float rankSpacing = 1f;
     [Tooltip("Piece pivot height along the selected placement plane's up axis.")]
     [SerializeField] private float heightOffset;
+    [Tooltip("Vertical distance between pieces in the same stack.")]
+    [SerializeField, Min(0f)] private float stackHeight = 0.06f;
 
     [Header("Rotation")]
     [Tooltip("Rotation added to every White prefab, relative to the reference object.")]
@@ -85,6 +90,13 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     [Header("Generation")]
     [SerializeField] private bool generateOnStart = true;
     [SerializeField, HideInInspector] private Transform generatedRoot;
+
+    [Header("Selection Marker")]
+    [SerializeField] private Color selectionMarkerColor = new(1f, 0.8f, 0f, 1f);
+    [SerializeField, Range(16, 96)] private int selectionMarkerSegments = 48;
+
+    private GameObject selectionMarker;
+    private Material selectionMarkerMaterial;
 
     public Transform PlacementOrigin => placementOrigin != null ? placementOrigin : transform;
 
@@ -140,6 +152,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     [ContextMenu("Clear Generated Pieces")]
     public void ClearGeneratedPieces()
     {
+        Array.Clear(spawnedPieces, 0, spawnedPieces.Length);
+
         if (generatedRoot == null)
         {
             return;
@@ -191,6 +205,135 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             + placementRotation * Vector3.up * heightOffset;
     }
 
+    public bool TryGetSquareFromScreenPoint(
+        Camera viewCamera,
+        Vector2 screenPoint,
+        out int file,
+        out int rank)
+    {
+        file = -1;
+        rank = -1;
+
+        if (viewCamera == null)
+        {
+            return false;
+        }
+
+        Quaternion placementRotation = PlacementRotation;
+        Vector3 right = placementRotation * Vector3.right;
+        Vector3 forward = placementRotation * Vector3.forward;
+        Vector3 up = placementRotation * Vector3.up;
+        Vector3 planePoint = PlacementOrigin.position + up * heightOffset;
+        Plane boardPlane = new(up, planePoint);
+        Ray pointerRay = viewCamera.ScreenPointToRay(screenPoint);
+
+        if (!boardPlane.Raycast(pointerRay, out float enter))
+        {
+            return false;
+        }
+
+        Vector3 boardPoint = pointerRay.GetPoint(enter);
+        Vector3 offset = boardPoint - PlacementOrigin.position;
+        float fileCoordinate = Vector3.Dot(offset, right) / fileSpacing;
+        float rankCoordinate = Vector3.Dot(offset, forward) / rankSpacing;
+
+        if (anchor == ChessBoardAnchor.BoardCenter)
+        {
+            fileCoordinate += 3.5f;
+            rankCoordinate += 3.5f;
+        }
+
+        if (fileCoordinate < -0.5f || fileCoordinate > 7.5f ||
+            rankCoordinate < -0.5f || rankCoordinate > 7.5f)
+        {
+            return false;
+        }
+
+        file = Mathf.RoundToInt(fileCoordinate);
+        rank = Mathf.RoundToInt(rankCoordinate);
+        return (uint)file < 8 && (uint)rank < 8;
+    }
+
+    public void ShowSelection(int file, int rank)
+    {
+        if ((uint)file >= 8 || (uint)rank >= 8)
+        {
+            HideSelection();
+            return;
+        }
+
+        if (selectionMarker == null)
+        {
+            CreateSelectionMarker();
+        }
+
+        float squareSize = Mathf.Min(fileSpacing, rankSpacing);
+        float radius = squareSize * 0.4f;
+        float lineWidth = squareSize * 0.06f;
+        Vector3 up = PlacementRotation * Vector3.up;
+        Vector3 right = PlacementRotation * Vector3.right;
+        Vector3 forward = PlacementRotation * Vector3.forward;
+        Vector3 centre = GetSquareWorldPosition(file, rank) + up * (squareSize * 0.025f);
+        LineRenderer lineRenderer = selectionMarker.GetComponent<LineRenderer>();
+
+        lineRenderer.startWidth = lineWidth;
+        lineRenderer.endWidth = lineWidth;
+        lineRenderer.positionCount = selectionMarkerSegments;
+
+        for (int index = 0; index < selectionMarkerSegments; index++)
+        {
+            float angle = index * Mathf.PI * 2f / selectionMarkerSegments;
+            Vector3 point = centre +
+                right * (Mathf.Cos(angle) * radius) +
+                forward * (Mathf.Sin(angle) * radius);
+            lineRenderer.SetPosition(index, point);
+        }
+
+        selectionMarker.SetActive(true);
+    }
+
+    public void HideSelection()
+    {
+        if (selectionMarker != null)
+        {
+            selectionMarker.SetActive(false);
+        }
+    }
+
+    public void RebuildFromNetworkState(
+        IEnumerable<NetworkChessPieceState> pieceStates)
+    {
+        ClearGeneratedPieces();
+        CreateGeneratedRoot();
+
+        foreach (NetworkChessPieceState pieceState in pieceStates)
+        {
+            GameObject prefab = GetPiecePrefab(
+                pieceState.OwnerTeam,
+                pieceState.PieceType);
+
+            if (prefab == null)
+            {
+                continue;
+            }
+
+            Vector3 rotationOffset = pieceState.OwnerTeam == PlayerTeam.White
+                ? whiteRotationOffset
+                : blackRotationOffset;
+
+            SpawnPiece(
+                prefab,
+                $"{pieceState.OwnerTeam}_{pieceState.PieceType}_" +
+                $"{GetSquareName(pieceState.File, pieceState.Rank)}_" +
+                $"Depth{pieceState.StackDepth}_Id{pieceState.Id}",
+                pieceState.File,
+                pieceState.Rank,
+                rotationOffset,
+                pieceState.StackDepth * stackHeight,
+                registerSingleSquare: false);
+        }
+    }
+
     private void CreateGeneratedRoot()
     {
         GameObject rootObject = new("Generated Chess Pieces");
@@ -204,6 +347,47 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             UnityEditor.Undo.RegisterCreatedObjectUndo(rootObject, "Generate Chess Pieces");
         }
 #endif
+    }
+
+    private void CreateSelectionMarker()
+    {
+        selectionMarker = new GameObject("Local Selection Marker");
+        Transform parent = pieceParent != null ? pieceParent : PlacementOrigin;
+        selectionMarker.transform.SetParent(parent, false);
+
+        LineRenderer lineRenderer = selectionMarker.AddComponent<LineRenderer>();
+        lineRenderer.useWorldSpace = true;
+        lineRenderer.loop = true;
+        lineRenderer.numCornerVertices = 4;
+        lineRenderer.numCapVertices = 4;
+        lineRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        lineRenderer.receiveShadows = false;
+        lineRenderer.startColor = selectionMarkerColor;
+        lineRenderer.endColor = selectionMarkerColor;
+
+        Shader markerShader = Shader.Find("Sprites/Default");
+
+        if (markerShader == null)
+        {
+            markerShader = Shader.Find("Unlit/Color");
+        }
+
+        if (markerShader != null)
+        {
+            selectionMarkerMaterial = new Material(markerShader)
+            {
+                color = selectionMarkerColor
+            };
+            lineRenderer.sharedMaterial = selectionMarkerMaterial;
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (selectionMarkerMaterial != null)
+        {
+            Destroy(selectionMarkerMaterial);
+        }
     }
 
     private void SpawnSide(
@@ -248,7 +432,9 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         string instanceName,
         int file,
         int rank,
-        Vector3 rotationOffset)
+        Vector3 rotationOffset,
+        float verticalOffset = 0f,
+        bool registerSingleSquare = true)
     {
         if (prefab == null)
         {
@@ -257,25 +443,61 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
         Quaternion rotation =
             PlacementRotation * Quaternion.Euler(rotationOffset) * prefab.transform.rotation;
+        Vector3 position =
+            GetSquareWorldPosition(file, rank) +
+            PlacementRotation * Vector3.up * verticalOffset;
         GameObject instance;
 
 #if UNITY_EDITOR
         if (!Application.isPlaying && UnityEditor.PrefabUtility.IsPartOfPrefabAsset(prefab))
         {
             instance = (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, generatedRoot);
-            instance.transform.SetPositionAndRotation(GetSquareWorldPosition(file, rank), rotation);
+            instance.transform.SetPositionAndRotation(position, rotation);
         }
         else
 #endif
         {
             instance = Instantiate(
                 prefab,
-                GetSquareWorldPosition(file, rank),
+                position,
                 rotation,
                 generatedRoot);
         }
 
         instance.name = instanceName;
+
+        if (registerSingleSquare)
+        {
+            spawnedPieces[file, rank] = instance;
+        }
+    }
+
+    private GameObject GetPiecePrefab(
+        PlayerTeam team,
+        ChessPieceType pieceType)
+    {
+        ChessPiecePrefabSet pieceSet = team switch
+        {
+            PlayerTeam.White => whitePieces,
+            PlayerTeam.Black => blackPieces,
+            _ => null
+        };
+
+        if (pieceSet == null)
+        {
+            return null;
+        }
+
+        return pieceType switch
+        {
+            ChessPieceType.King => pieceSet.King,
+            ChessPieceType.Queen => pieceSet.Queen,
+            ChessPieceType.Rook => pieceSet.Rook,
+            ChessPieceType.Bishop => pieceSet.Bishop,
+            ChessPieceType.Knight => pieceSet.Knight,
+            ChessPieceType.Pawn => pieceSet.Pawn,
+            _ => null
+        };
     }
 
     private static string GetSquareName(int file, int rank)
@@ -287,5 +509,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     {
         fileSpacing = Mathf.Max(0.001f, fileSpacing);
         rankSpacing = Mathf.Max(0.001f, rankSpacing);
+        stackHeight = Mathf.Max(0f, stackHeight);
+        selectionMarkerSegments = Mathf.Clamp(selectionMarkerSegments, 16, 96);
     }
 }
