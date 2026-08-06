@@ -48,12 +48,23 @@ public enum ChessPlacementPlane
 [DisallowMultipleComponent]
 public sealed class ChessPieceSpawner : MonoBehaviour
 {
+    private sealed class NetworkPieceVisual
+    {
+        public GameObject Instance;
+        public PlayerTeam Team;
+        public ChessPieceType PieceType;
+        public Vector3 TargetPosition;
+        public Quaternion TargetRotation;
+        public Renderer[] Renderers;
+    }
+
     private static readonly string[] BackRankNames =
     {
         "Rook", "Knight", "Bishop", "Queen", "King", "Bishop", "Knight", "Rook"
     };
 
     private readonly GameObject[,] spawnedPieces = new GameObject[8, 8];
+    private readonly Dictionary<ushort, NetworkPieceVisual> networkPieceVisuals = new();
 
     [Header("Piece Prefabs")]
     [SerializeField] private ChessPiecePrefabSet whitePieces = new();
@@ -97,8 +108,23 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
     private GameObject selectionMarker;
     private Material selectionMarkerMaterial;
+    private bool networkVisualMode;
+    private GameObject voiceQuestionMark;
+    private TextMesh voiceQuestionMarkText;
+    private int voiceQuestionMarkPieceId = -1;
+    private float voiceQuestionMarkExpiresAt;
+#if UNITY_EDITOR
+    private GameObject editorVoiceTargetMarker;
+    private Material editorVoiceTargetMaterial;
+    private int editorVoiceTargetPieceId = -1;
+#endif
 
     public Transform PlacementOrigin => placementOrigin != null ? placementOrigin : transform;
+    public Vector3 BoardRight => PlacementRotation * Vector3.right;
+    public Vector3 BoardForward => PlacementRotation * Vector3.forward;
+    public Vector3 BoardUp => PlacementRotation * Vector3.up;
+    public float FileSpacing => fileSpacing;
+    public float RankSpacing => rankSpacing;
 
     private Quaternion PlacementRotation
     {
@@ -121,6 +147,34 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         {
             GenerateInitialPosition();
         }
+    }
+
+    private void LateUpdate()
+    {
+        if (!networkVisualMode)
+        {
+            return;
+        }
+
+        float blend = 1f - Mathf.Exp(-18f * Time.deltaTime);
+
+        foreach (NetworkPieceVisual visual in networkPieceVisuals.Values)
+        {
+            if (visual.Instance == null)
+            {
+                continue;
+            }
+
+            Transform pieceTransform = visual.Instance.transform;
+            pieceTransform.SetPositionAndRotation(
+                Vector3.Lerp(pieceTransform.position, visual.TargetPosition, blend),
+                Quaternion.Slerp(pieceTransform.rotation, visual.TargetRotation, blend));
+        }
+
+        UpdateVoiceQuestionMark();
+#if UNITY_EDITOR
+        UpdateEditorVoiceTargetMarker();
+#endif
     }
 
     /// <summary>
@@ -153,6 +207,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     public void ClearGeneratedPieces()
     {
         Array.Clear(spawnedPieces, 0, spawnedPieces.Length);
+        networkPieceVisuals.Clear();
+        networkVisualMode = false;
 
         if (generatedRoot == null)
         {
@@ -188,6 +244,11 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             throw new ArgumentOutOfRangeException(nameof(rank), rank, "Rank must be between 0 and 7.");
         }
 
+        return GetBoardWorldPosition(file, rank);
+    }
+
+    public Vector3 GetBoardWorldPosition(float file, float rank)
+    {
         float fileOffset = file * fileSpacing;
         float rankOffset = rank * rankSpacing;
 
@@ -203,6 +264,105 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             + placementRotation * Vector3.right * fileOffset
             + placementRotation * Vector3.forward * rankOffset
             + placementRotation * Vector3.up * heightOffset;
+    }
+
+    public bool TryGetBoardCoordinates(
+        Vector3 worldPosition,
+        out float file,
+        out float rank)
+    {
+        Vector3 offset = worldPosition - PlacementOrigin.position;
+        file = Vector3.Dot(offset, BoardRight) / fileSpacing;
+        rank = Vector3.Dot(offset, BoardForward) / rankSpacing;
+
+        if (anchor == ChessBoardAnchor.BoardCenter)
+        {
+            file += 3.5f;
+            rank += 3.5f;
+        }
+
+        return file >= 0f && file <= 7f && rank >= 0f && rank <= 7f;
+    }
+
+    public bool TryGetGazeTarget(
+        Camera viewCamera,
+        PlayerTeam team,
+        out ushort pieceId)
+    {
+        pieceId = 0;
+
+        if (viewCamera == null || team == PlayerTeam.Unassigned)
+        {
+            return false;
+        }
+
+        Plane[] frustumPlanes = GeometryUtility.CalculateFrustumPlanes(viewCamera);
+        float bestScreenDistance = float.PositiveInfinity;
+        float bestDepth = float.PositiveInfinity;
+        bool found = false;
+
+        foreach (KeyValuePair<ushort, NetworkPieceVisual> pair in networkPieceVisuals)
+        {
+            NetworkPieceVisual visual = pair.Value;
+
+            if (visual.Instance == null || visual.Team != team ||
+                !TryGetVisualBounds(visual, out Bounds bounds) ||
+                !GeometryUtility.TestPlanesAABB(frustumPlanes, bounds))
+            {
+                continue;
+            }
+
+            Vector3 viewport = viewCamera.WorldToViewportPoint(bounds.center);
+
+            if (viewport.z <= viewCamera.nearClipPlane ||
+                viewport.x < 0f || viewport.x > 1f ||
+                viewport.y < 0f || viewport.y > 1f)
+            {
+                continue;
+            }
+
+            float screenDistance =
+                (new Vector2(viewport.x, viewport.y) - new Vector2(0.5f, 0.5f)).sqrMagnitude;
+
+            if (screenDistance > bestScreenDistance + 0.000001f ||
+                (Mathf.Abs(screenDistance - bestScreenDistance) <= 0.000001f &&
+                 viewport.z >= bestDepth))
+            {
+                continue;
+            }
+
+            bestScreenDistance = screenDistance;
+            bestDepth = viewport.z;
+            pieceId = pair.Key;
+            found = true;
+        }
+
+        return found;
+    }
+
+    public void ShowVoiceQuestionMark(ushort pieceId, float duration = 1f)
+    {
+        if (!networkPieceVisuals.ContainsKey(pieceId))
+        {
+            return;
+        }
+
+        EnsureVoiceQuestionMark();
+        voiceQuestionMarkPieceId = pieceId;
+        voiceQuestionMarkExpiresAt = Time.unscaledTime + Mathf.Max(0.1f, duration);
+        voiceQuestionMark.SetActive(true);
+    }
+
+    public void SetEditorVoiceTarget(ushort? pieceId)
+    {
+#if UNITY_EDITOR
+        editorVoiceTargetPieceId = pieceId.HasValue ? pieceId.Value : -1;
+
+        if (editorVoiceTargetPieceId < 0 && editorVoiceTargetMarker != null)
+        {
+            editorVoiceTargetMarker.SetActive(false);
+        }
+#endif
     }
 
     public bool TryGetSquareFromScreenPoint(
@@ -256,7 +416,12 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
     public void ShowSelection(int file, int rank)
     {
-        if ((uint)file >= 8 || (uint)rank >= 8)
+        ShowSelection((float)file, rank);
+    }
+
+    public void ShowSelection(float file, float rank)
+    {
+        if (file < 0f || file > 7f || rank < 0f || rank > 7f)
         {
             HideSelection();
             return;
@@ -273,7 +438,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         Vector3 up = PlacementRotation * Vector3.up;
         Vector3 right = PlacementRotation * Vector3.right;
         Vector3 forward = PlacementRotation * Vector3.forward;
-        Vector3 centre = GetSquareWorldPosition(file, rank) + up * (squareSize * 0.025f);
+        Vector3 centre = GetBoardWorldPosition(file, rank) + up * (squareSize * 0.025f);
         LineRenderer lineRenderer = selectionMarker.GetComponent<LineRenderer>();
 
         lineRenderer.startWidth = lineWidth;
@@ -303,11 +468,22 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     public void RebuildFromNetworkState(
         IEnumerable<NetworkChessPieceState> pieceStates)
     {
-        ClearGeneratedPieces();
-        CreateGeneratedRoot();
+        if (!networkVisualMode)
+        {
+            ClearGeneratedPieces();
+            CreateGeneratedRoot();
+            networkVisualMode = true;
+        }
+        else if (generatedRoot == null)
+        {
+            CreateGeneratedRoot();
+        }
+
+        HashSet<ushort> livePieceIds = new();
 
         foreach (NetworkChessPieceState pieceState in pieceStates)
         {
+            livePieceIds.Add(pieceState.Id);
             GameObject prefab = GetPiecePrefab(
                 pieceState.OwnerTeam,
                 pieceState.PieceType);
@@ -317,21 +493,233 @@ public sealed class ChessPieceSpawner : MonoBehaviour
                 continue;
             }
 
-            Vector3 rotationOffset = pieceState.OwnerTeam == PlayerTeam.White
-                ? whiteRotationOffset
-                : blackRotationOffset;
+            if (!networkPieceVisuals.TryGetValue(
+                    pieceState.Id,
+                    out NetworkPieceVisual visual) ||
+                visual.Instance == null ||
+                visual.Team != pieceState.OwnerTeam ||
+                visual.PieceType != pieceState.PieceType)
+            {
+                if (visual?.Instance != null)
+                {
+                    Destroy(visual.Instance);
+                }
 
-            SpawnPiece(
-                prefab,
+                visual = CreateNetworkPieceVisual(prefab, pieceState);
+                networkPieceVisuals[pieceState.Id] = visual;
+            }
+
+            visual.Instance.name =
                 $"{pieceState.OwnerTeam}_{pieceState.PieceType}_" +
                 $"{GetSquareName(pieceState.File, pieceState.Rank)}_" +
-                $"Depth{pieceState.StackDepth}_Id{pieceState.Id}",
-                pieceState.File,
-                pieceState.Rank,
-                rotationOffset,
-                pieceState.StackDepth * stackHeight,
-                registerSingleSquare: false);
+                $"Depth{pieceState.StackDepth}_Id{pieceState.Id}";
+            visual.Team = pieceState.OwnerTeam;
+            visual.PieceType = pieceState.PieceType;
+            visual.TargetPosition =
+                GetBoardWorldPosition(pieceState.BoardFile, pieceState.BoardRank) +
+                PlacementRotation * Vector3.up * (pieceState.StackDepth * stackHeight);
+            visual.TargetRotation = GetNetworkPieceRotation(prefab, pieceState);
         }
+
+        List<ushort> removedIds = new();
+
+        foreach (KeyValuePair<ushort, NetworkPieceVisual> pair in networkPieceVisuals)
+        {
+            if (livePieceIds.Contains(pair.Key))
+            {
+                continue;
+            }
+
+            if (pair.Value.Instance != null)
+            {
+                Destroy(pair.Value.Instance);
+            }
+
+            removedIds.Add(pair.Key);
+        }
+
+        foreach (ushort removedId in removedIds)
+        {
+            networkPieceVisuals.Remove(removedId);
+        }
+    }
+
+    private NetworkPieceVisual CreateNetworkPieceVisual(
+        GameObject prefab,
+        NetworkChessPieceState pieceState)
+    {
+        Vector3 position =
+            GetBoardWorldPosition(pieceState.BoardFile, pieceState.BoardRank) +
+            PlacementRotation * Vector3.up * (pieceState.StackDepth * stackHeight);
+        Quaternion rotation = GetNetworkPieceRotation(prefab, pieceState);
+        GameObject instance = Instantiate(prefab, position, rotation, generatedRoot);
+
+        return new NetworkPieceVisual
+        {
+            Instance = instance,
+            Team = pieceState.OwnerTeam,
+            PieceType = pieceState.PieceType,
+            TargetPosition = position,
+            TargetRotation = rotation,
+            Renderers = instance.GetComponentsInChildren<Renderer>(includeInactive: false)
+        };
+    }
+
+    private static bool TryGetVisualBounds(
+        NetworkPieceVisual visual,
+        out Bounds bounds)
+    {
+        bounds = default;
+        bool initialized = false;
+
+        if (visual.Renderers == null)
+        {
+            return false;
+        }
+
+        foreach (Renderer pieceRenderer in visual.Renderers)
+        {
+            if (pieceRenderer == null || !pieceRenderer.enabled)
+            {
+                continue;
+            }
+
+            if (!initialized)
+            {
+                bounds = pieceRenderer.bounds;
+                initialized = true;
+            }
+            else
+            {
+                bounds.Encapsulate(pieceRenderer.bounds);
+            }
+        }
+
+        return initialized;
+    }
+
+    private void EnsureVoiceQuestionMark()
+    {
+        if (voiceQuestionMark != null)
+        {
+            return;
+        }
+
+        voiceQuestionMark = new GameObject("Voice Command Question Mark");
+        voiceQuestionMarkText = voiceQuestionMark.AddComponent<TextMesh>();
+        voiceQuestionMarkText.text = "?";
+        voiceQuestionMarkText.anchor = TextAnchor.MiddleCenter;
+        voiceQuestionMarkText.alignment = TextAlignment.Center;
+        voiceQuestionMarkText.fontSize = 96;
+        voiceQuestionMarkText.characterSize = Mathf.Min(fileSpacing, rankSpacing) * 0.035f;
+        voiceQuestionMarkText.color = Color.white;
+        voiceQuestionMark.SetActive(false);
+    }
+
+    private void UpdateVoiceQuestionMark()
+    {
+        if (voiceQuestionMark == null || !voiceQuestionMark.activeSelf)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime >= voiceQuestionMarkExpiresAt ||
+            !networkPieceVisuals.TryGetValue(
+                (ushort)voiceQuestionMarkPieceId,
+                out NetworkPieceVisual visual) ||
+            visual.Instance == null)
+        {
+            voiceQuestionMark.SetActive(false);
+            voiceQuestionMarkPieceId = -1;
+            return;
+        }
+
+        Vector3 position = visual.TargetPosition + BoardUp * Mathf.Min(fileSpacing, rankSpacing);
+
+        if (TryGetVisualBounds(visual, out Bounds bounds))
+        {
+            position = bounds.center + BoardUp * (bounds.extents.magnitude + 0.12f);
+        }
+
+        voiceQuestionMark.transform.position = position;
+        Camera viewCamera = Camera.main;
+
+        if (viewCamera != null)
+        {
+            voiceQuestionMark.transform.rotation = Quaternion.LookRotation(
+                voiceQuestionMark.transform.position - viewCamera.transform.position,
+                viewCamera.transform.up);
+        }
+    }
+
+#if UNITY_EDITOR
+    private void UpdateEditorVoiceTargetMarker()
+    {
+        if (editorVoiceTargetPieceId < 0 ||
+            !networkPieceVisuals.TryGetValue(
+                (ushort)editorVoiceTargetPieceId,
+                out NetworkPieceVisual visual) ||
+            visual.Instance == null)
+        {
+            if (editorVoiceTargetMarker != null)
+            {
+                editorVoiceTargetMarker.SetActive(false);
+            }
+
+            return;
+        }
+
+        if (editorVoiceTargetMarker == null)
+        {
+            editorVoiceTargetMarker = new GameObject("Editor Voice Gaze Target");
+            LineRenderer lineRenderer = editorVoiceTargetMarker.AddComponent<LineRenderer>();
+            lineRenderer.useWorldSpace = true;
+            lineRenderer.loop = true;
+            lineRenderer.positionCount = 48;
+            lineRenderer.startWidth = Mathf.Min(fileSpacing, rankSpacing) * 0.035f;
+            lineRenderer.endWidth = lineRenderer.startWidth;
+            lineRenderer.startColor = Color.cyan;
+            lineRenderer.endColor = Color.cyan;
+            lineRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            lineRenderer.receiveShadows = false;
+            Shader shader = Shader.Find("Sprites/Default");
+
+            if (shader != null)
+            {
+                editorVoiceTargetMaterial = new Material(shader) { color = Color.cyan };
+                lineRenderer.sharedMaterial = editorVoiceTargetMaterial;
+            }
+        }
+
+        float radius = Mathf.Min(fileSpacing, rankSpacing) * 0.43f;
+        Vector3 centre = visual.TargetPosition + BoardUp * 0.04f;
+        LineRenderer marker = editorVoiceTargetMarker.GetComponent<LineRenderer>();
+
+        for (int index = 0; index < marker.positionCount; index++)
+        {
+            float angle = index * Mathf.PI * 2f / marker.positionCount;
+            marker.SetPosition(
+                index,
+                centre + BoardRight * (Mathf.Cos(angle) * radius) +
+                BoardForward * (Mathf.Sin(angle) * radius));
+        }
+
+        editorVoiceTargetMarker.SetActive(true);
+    }
+#endif
+
+    private Quaternion GetNetworkPieceRotation(
+        GameObject prefab,
+        NetworkChessPieceState pieceState)
+    {
+        Vector3 rotationOffset = pieceState.OwnerTeam == PlayerTeam.White
+            ? whiteRotationOffset
+            : blackRotationOffset;
+
+        return PlacementRotation *
+               Quaternion.Euler(0f, pieceState.VoiceHeading, 0f) *
+               Quaternion.Euler(rotationOffset) *
+               prefab.transform.rotation;
     }
 
     private void CreateGeneratedRoot()
@@ -388,6 +776,13 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         {
             Destroy(selectionMarkerMaterial);
         }
+
+#if UNITY_EDITOR
+        if (editorVoiceTargetMaterial != null)
+        {
+            Destroy(editorVoiceTargetMaterial);
+        }
+#endif
     }
 
     private void SpawnSide(

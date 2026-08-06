@@ -73,6 +73,12 @@ public sealed class OrbitCamera : MonoBehaviour
 
     private void LateUpdate()
     {
+        if (InGameVoiceSettingsUI.IsOpen)
+        {
+            ApplyOrbit();
+            return;
+        }
+
         Mouse mouse = Mouse.current;
 
         if (mouse != null)

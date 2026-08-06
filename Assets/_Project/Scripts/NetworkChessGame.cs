@@ -47,6 +47,11 @@ public struct NetworkChessPieceState :
     public byte StackDepth;
     public byte NextMoveDepth;
     public bool HasMoved;
+    public float BoardFile;
+    public float BoardRank;
+    public float VoiceHeading;
+    public sbyte VoiceMoveAxis;
+    public sbyte VoiceTurnAxis;
 
     public NetworkChessPieceState(
         ushort id,
@@ -63,6 +68,11 @@ public struct NetworkChessPieceState :
         StackDepth = 0;
         NextMoveDepth = 0;
         HasMoved = false;
+        BoardFile = file;
+        BoardRank = rank;
+        VoiceHeading = 0f;
+        VoiceMoveAxis = 0;
+        VoiceTurnAxis = 0;
     }
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer)
@@ -76,6 +86,11 @@ public struct NetworkChessPieceState :
         serializer.SerializeValue(ref StackDepth);
         serializer.SerializeValue(ref NextMoveDepth);
         serializer.SerializeValue(ref HasMoved);
+        serializer.SerializeValue(ref BoardFile);
+        serializer.SerializeValue(ref BoardRank);
+        serializer.SerializeValue(ref VoiceHeading);
+        serializer.SerializeValue(ref VoiceMoveAxis);
+        serializer.SerializeValue(ref VoiceTurnAxis);
     }
 
     public bool Equals(NetworkChessPieceState other)
@@ -87,13 +102,22 @@ public struct NetworkChessPieceState :
                Rank == other.Rank &&
                StackDepth == other.StackDepth &&
                NextMoveDepth == other.NextMoveDepth &&
-               HasMoved == other.HasMoved;
+               HasMoved == other.HasMoved &&
+               BoardFile.Equals(other.BoardFile) &&
+               BoardRank.Equals(other.BoardRank) &&
+               VoiceHeading == other.VoiceHeading &&
+               VoiceMoveAxis == other.VoiceMoveAxis &&
+               VoiceTurnAxis == other.VoiceTurnAxis;
     }
 }
 
 public sealed class NetworkChessGame : NetworkBehaviour
 {
     [SerializeField] private ChessPieceSpawner pieceSpawner;
+
+    [Header("Voice Free Movement")]
+    [SerializeField, Min(0.05f)] private float voiceMoveSpeed = 0.85f;
+    [SerializeField, Min(5f)] private float voiceTurnSpeed = 90f;
 
     private readonly NetworkList<NetworkChessPieceState> _pieces = new(
         readPerm: NetworkVariableReadPermission.Everyone,
@@ -152,9 +176,16 @@ public sealed class NetworkChessGame : NetworkBehaviour
     private string _moveStatus = "Select a stack or enter a move.";
     private int _selectedFile = -1;
     private int _selectedRank = -1;
+    private int _selectedPieceId = -1;
+    private int _localVoiceTargetPieceId = -1;
+    private float _localCommanderFile = 3.5f;
+    private float _localCommanderRank = 3.5f;
     private bool _visualRefreshPending;
 
     public PlayerTeam CurrentTurn => _currentTurn.Value;
+    public bool HasLocalVoiceSelection =>
+        _localVoiceTargetPieceId >= 0 &&
+        FindPieceIndexById((ushort)_localVoiceTargetPieceId) >= 0;
 
     public override void OnNetworkSpawn()
     {
@@ -187,6 +218,11 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
         RefreshLocalSequenceSelection();
 
+        if (SessionManager.IsFrontEndVisible || InGameVoiceSettingsUI.IsOpen)
+        {
+            return;
+        }
+
         Mouse mouse = Mouse.current;
 
         if (mouse == null || !mouse.leftButton.wasPressedThisFrame)
@@ -201,6 +237,57 @@ public sealed class NetworkChessGame : NetworkBehaviour
                 out int rank))
         {
             HandleSquareClicked(file, rank);
+        }
+    }
+
+    private void FixedUpdate()
+    {
+        if (!IsSpawned || !IsServer || _winner.Value != PlayerTeam.Unassigned)
+        {
+            return;
+        }
+
+        for (int index = 0; index < _pieces.Count; index++)
+        {
+            NetworkChessPieceState piece = _pieces[index];
+
+            if (piece.VoiceMoveAxis == 0 && piece.VoiceTurnAxis == 0)
+            {
+                continue;
+            }
+
+            if (piece.VoiceTurnAxis != 0)
+            {
+                piece.VoiceHeading = Mathf.Repeat(
+                    piece.VoiceHeading +
+                    piece.VoiceTurnAxis * voiceTurnSpeed * Time.fixedDeltaTime,
+                    360f);
+            }
+
+            if (piece.VoiceMoveAxis != 0)
+            {
+                Vector2 direction = GetVoiceMoveDirection(
+                    piece.OwnerTeam,
+                    piece.VoiceHeading) * piece.VoiceMoveAxis;
+                Vector2 current = new(piece.BoardFile, piece.BoardRank);
+                Vector2 next = current + direction * (voiceMoveSpeed * Time.fixedDeltaTime);
+                bool reachedBoundary =
+                    next.x < 0f || next.x > 7f || next.y < 0f || next.y > 7f;
+                next.x = Mathf.Clamp(next.x, 0f, 7f);
+                next.y = Mathf.Clamp(next.y, 0f, 7f);
+
+                piece.BoardFile = next.x;
+                piece.BoardRank = next.y;
+                piece.File = (byte)Mathf.Clamp(Mathf.RoundToInt(next.x), 0, 7);
+                piece.Rank = (byte)Mathf.Clamp(Mathf.RoundToInt(next.y), 0, 7);
+
+                if (reachedBoundary)
+                {
+                    piece.VoiceMoveAxis = 0;
+                }
+            }
+
+            _pieces[index] = piece;
         }
     }
 
@@ -299,6 +386,17 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
         _selectedFile = activeFile;
         _selectedRank = activeRank;
+
+        List<int> stack = GetStackIndicesAt(activeFile, activeRank);
+        int movementPieceIndex = FindPieceIndexAtDepth(
+            stack,
+            _activeMoveDepth.Value);
+
+        if (movementPieceIndex >= 0)
+        {
+            _selectedPieceId = _pieces[movementPieceIndex].Id;
+        }
+
         pieceSpawner.ShowSelection(activeFile, activeRank);
     }
 
@@ -409,20 +507,12 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
         NetworkChessPieceState movementPiece = _pieces[movementPieceIndex];
 
-        if (!HasAnyLegalMove(
-                movementPiece,
-                file,
-                rank,
-                firstMoveOfTurn: !_sequenceActive.Value))
-        {
-            _moveStatus =
-                $"{movementPiece.PieceType} on layer {moveDepth + 1} has no legal move.";
-            return;
-        }
-
         _selectedFile = file;
         _selectedRank = rank;
-        pieceSpawner?.ShowSelection(file, rank);
+        _selectedPieceId = movementPiece.Id;
+        pieceSpawner?.ShowSelection(
+            movementPiece.BoardFile,
+            movementPiece.BoardRank);
         _moveStatus =
             $"Selected {GetSquareName(file, rank)}. " +
             $"Next: layer {moveDepth + 1} {movementPiece.PieceType}.";
@@ -504,7 +594,176 @@ public sealed class NetworkChessGame : NetworkBehaviour
     {
         _selectedFile = -1;
         _selectedRank = -1;
+        _selectedPieceId = -1;
         pieceSpawner?.HideSelection();
+    }
+
+    public void UpdateLocalVoiceGazeTarget(
+        ushort? pieceId,
+        float commanderFile,
+        float commanderRank)
+    {
+        _localCommanderFile = commanderFile;
+        _localCommanderRank = commanderRank;
+        _localVoiceTargetPieceId = pieceId.HasValue ? pieceId.Value : -1;
+        pieceSpawner?.SetEditorVoiceTarget(pieceId);
+    }
+
+    public bool TryGetLocalVoiceTargetSnapshot(
+        out ushort pieceId,
+        out float distanceInSquares)
+    {
+        pieceId = 0;
+        distanceInSquares = 0f;
+
+        if (_localVoiceTargetPieceId < 0)
+        {
+            return false;
+        }
+
+        int pieceIndex = FindPieceIndexById((ushort)_localVoiceTargetPieceId);
+
+        if (pieceIndex < 0)
+        {
+            return false;
+        }
+
+        NetworkChessPieceState piece = _pieces[pieceIndex];
+        pieceId = piece.Id;
+        distanceInSquares = Vector2.Distance(
+            new Vector2(_localCommanderFile, _localCommanderRank),
+            new Vector2(piece.BoardFile, piece.BoardRank));
+        return true;
+    }
+
+    public void ShowLocalVoiceFailure(ushort? pieceId)
+    {
+        if (pieceId.HasValue)
+        {
+            pieceSpawner?.ShowVoiceQuestionMark(pieceId.Value);
+        }
+    }
+
+    public bool TryExecuteLocalVoiceCommand(
+        ushort pieceId,
+        float targetDistanceInSquares,
+        float commandReachInSquares,
+        PieceVoiceCommand command,
+        out string rejection)
+    {
+        rejection = string.Empty;
+
+        if (!IsSpawned || NetworkManager == null || !NetworkManager.IsListening)
+        {
+            rejection = "게임 네트워크가 아직 준비되지 않았습니다.";
+            return false;
+        }
+
+        if (!TryGetLocalPlayer(out NetworkPlayer localPlayer))
+        {
+            rejection = "로컬 플레이어를 찾지 못했습니다.";
+            return false;
+        }
+
+        int pieceIndex = FindPieceIndexById(pieceId);
+
+        if (pieceIndex < 0 || _pieces[pieceIndex].OwnerTeam != localPlayer.Team)
+        {
+            rejection = "선택한 말은 현재 플레이어의 말이 아닙니다.";
+            return false;
+        }
+
+        if (command != PieceVoiceCommand.Stop &&
+            localPlayer.Team != _currentTurn.Value)
+        {
+            rejection = "현재 팀의 차례가 아닙니다.";
+            return false;
+        }
+
+        if (commandReachInSquares + 0.05f < targetDistanceInSquares)
+        {
+            rejection =
+                $"목소리가 말까지 닿지 않았습니다. " +
+                $"거리 {targetDistanceInSquares:F1}칸 / 전달 {commandReachInSquares:F1}칸";
+            ShowLocalVoiceFailure(pieceId);
+            return false;
+        }
+
+        RequestVoiceCommandRpc(pieceId, command);
+        return true;
+    }
+
+    [Rpc(
+        SendTo.Server,
+        InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestVoiceCommandRpc(
+        ushort pieceId,
+        PieceVoiceCommand command,
+        RpcParams rpcParams = default)
+    {
+        if (!NetworkPlayer.TryGetByClientId(
+                rpcParams.Receive.SenderClientId,
+                out NetworkPlayer player))
+        {
+            return;
+        }
+
+        int pieceIndex = FindPieceIndexById(pieceId);
+
+        if (pieceIndex < 0)
+        {
+            return;
+        }
+
+        NetworkChessPieceState piece = _pieces[pieceIndex];
+
+        if (piece.OwnerTeam != player.Team ||
+            (command != PieceVoiceCommand.Stop && player.Team != _currentTurn.Value))
+        {
+            return;
+        }
+
+        switch (command)
+        {
+            case PieceVoiceCommand.MoveForward:
+                piece.VoiceMoveAxis = 1;
+                break;
+            case PieceVoiceCommand.MoveBackward:
+                piece.VoiceMoveAxis = -1;
+                break;
+            case PieceVoiceCommand.Stop:
+                piece.VoiceMoveAxis = 0;
+                piece.VoiceTurnAxis = 0;
+                break;
+            case PieceVoiceCommand.TurnLeft:
+                piece.VoiceTurnAxis = -1;
+                break;
+            case PieceVoiceCommand.TurnRight:
+                piece.VoiceTurnAxis = 1;
+                break;
+            default:
+                return;
+        }
+
+        _pieces[pieceIndex] = piece;
+        _moveStatus =
+            $"Voice command: {KoreanVoiceCommand.GetDisplayName(command)}";
+    }
+
+    private static Vector2 GetVoiceMoveDirection(
+        PlayerTeam team,
+        float heading)
+    {
+        Vector2 forward = team == PlayerTeam.Black
+            ? Vector2.down
+            : Vector2.up;
+        float radians = heading * Mathf.Deg2Rad;
+        float sine = Mathf.Sin(radians);
+        float cosine = Mathf.Cos(radians);
+
+        return new Vector2(
+            forward.x * cosine + forward.y * sine,
+            -forward.x * sine + forward.y * cosine);
     }
 
     [Rpc(
@@ -760,6 +1019,10 @@ public sealed class NetworkChessGame : NetworkBehaviour
         {
             NetworkChessPieceState piece = _pieces[index];
             piece.OwnerTeam = newOwner;
+            piece.BoardFile = toFile;
+            piece.BoardRank = toRank;
+            piece.VoiceMoveAxis = 0;
+            piece.VoiceTurnAxis = 0;
             _pieces[index] = piece;
         }
 
@@ -769,6 +1032,10 @@ public sealed class NetworkChessGame : NetworkBehaviour
             piece.OwnerTeam = newOwner;
             piece.File = (byte)toFile;
             piece.Rank = (byte)toRank;
+            piece.BoardFile = toFile;
+            piece.BoardRank = toRank;
+            piece.VoiceMoveAxis = 0;
+            piece.VoiceTurnAxis = 0;
             piece.StackDepth = (byte)(targetDepthOffset + piece.StackDepth);
 
             if (index == movementPieceIndex)
@@ -875,6 +1142,19 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
     private void EndTurn(PlayerTeam teamThatMoved)
     {
+        for (int index = 0; index < _pieces.Count; index++)
+        {
+            NetworkChessPieceState piece = _pieces[index];
+
+            if (piece.OwnerTeam == teamThatMoved &&
+                (piece.VoiceMoveAxis != 0 || piece.VoiceTurnAxis != 0))
+            {
+                piece.VoiceMoveAxis = 0;
+                piece.VoiceTurnAxis = 0;
+                _pieces[index] = piece;
+            }
+        }
+
         ClearServerSequence();
         _currentTurn.Value = GetOpponent(teamThatMoved);
     }
