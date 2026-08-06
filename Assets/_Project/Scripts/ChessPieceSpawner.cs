@@ -48,6 +48,8 @@ public enum ChessPlacementPlane
 [DisallowMultipleComponent]
 public sealed class ChessPieceSpawner : MonoBehaviour
 {
+    public const float DefaultBoardBorderWidthInSquares = 1.25f;
+
     private sealed class NetworkPieceVisual
     {
         public GameObject Instance;
@@ -89,8 +91,18 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     [SerializeField, Min(0.001f)] private float rankSpacing = 1f;
     [Tooltip("Piece pivot height along the selected placement plane's up axis.")]
     [SerializeField] private float heightOffset;
-    [Tooltip("Vertical distance between pieces in the same stack.")]
-    [SerializeField, Min(0f)] private float stackHeight = 0.06f;
+
+    [Header("Board Ground")]
+    [Tooltip("Walkable border outside the 8x8 squares, measured in chess-square units.")]
+    [SerializeField, Min(0f)]
+    private float boardBorderWidthInSquares = DefaultBoardBorderWidthInSquares;
+
+    [Header("Ring Out Visuals")]
+    [Tooltip("Distance beyond the board edge over which the falling animation plays.")]
+    [SerializeField, Min(0.1f)] private float ringOutVisualDistance = 0.8f;
+    [Tooltip("Downward fall distance, measured in chess-square units.")]
+    [SerializeField, Min(0.1f)] private float ringOutDropDistance = 2.5f;
+    [SerializeField, Range(0f, 120f)] private float ringOutTiltAngle = 82f;
 
     [Header("Rotation")]
     [Tooltip("Rotation added to every White prefab, relative to the reference object.")]
@@ -113,11 +125,13 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     private TextMesh voiceQuestionMarkText;
     private int voiceQuestionMarkPieceId = -1;
     private float voiceQuestionMarkExpiresAt;
-#if UNITY_EDITOR
-    private GameObject editorVoiceTargetMarker;
-    private Material editorVoiceTargetMaterial;
-    private int editorVoiceTargetPieceId = -1;
-#endif
+    private GameObject voiceSelectionMarker;
+    private Material voiceSelectionMaterial;
+    private int voiceSelectionPieceId = -1;
+    private GameObject voiceCommandMarker;
+    private Material voiceCommandMaterial;
+    private int voiceCommandPieceId = -1;
+    private float voiceCommandMarkerExpiresAt = float.PositiveInfinity;
 
     public Transform PlacementOrigin => placementOrigin != null ? placementOrigin : transform;
     public Vector3 BoardRight => PlacementRotation * Vector3.right;
@@ -125,6 +139,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     public Vector3 BoardUp => PlacementRotation * Vector3.up;
     public float FileSpacing => fileSpacing;
     public float RankSpacing => rankSpacing;
+    public float GroundMinimumCoordinate => -0.5f - boardBorderWidthInSquares;
+    public float GroundMaximumCoordinate => 7.5f + boardBorderWidthInSquares;
 
     private Quaternion PlacementRotation
     {
@@ -172,9 +188,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         }
 
         UpdateVoiceQuestionMark();
-#if UNITY_EDITOR
-        UpdateEditorVoiceTargetMarker();
-#endif
+        UpdateVoiceTargetMarkers();
     }
 
     /// <summary>
@@ -297,6 +311,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         }
 
         Plane[] frustumPlanes = GeometryUtility.CalculateFrustumPlanes(viewCamera);
+        Vector2 screenCenter = viewCamera.pixelRect.center;
         float bestScreenDistance = float.PositiveInfinity;
         float bestDepth = float.PositiveInfinity;
         bool found = false;
@@ -306,38 +321,192 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             NetworkPieceVisual visual = pair.Value;
 
             if (visual.Instance == null || visual.Team != team ||
-                !TryGetVisualBounds(visual, out Bounds bounds) ||
-                !GeometryUtility.TestPlanesAABB(frustumPlanes, bounds))
+                !TryGetVisualScreenScore(
+                    visual,
+                    viewCamera,
+                    frustumPlanes,
+                    screenCenter,
+                    out float screenDistance,
+                    out float depth))
             {
                 continue;
             }
 
-            Vector3 viewport = viewCamera.WorldToViewportPoint(bounds.center);
-
-            if (viewport.z <= viewCamera.nearClipPlane ||
-                viewport.x < 0f || viewport.x > 1f ||
-                viewport.y < 0f || viewport.y > 1f)
-            {
-                continue;
-            }
-
-            float screenDistance =
-                (new Vector2(viewport.x, viewport.y) - new Vector2(0.5f, 0.5f)).sqrMagnitude;
-
-            if (screenDistance > bestScreenDistance + 0.000001f ||
-                (Mathf.Abs(screenDistance - bestScreenDistance) <= 0.000001f &&
-                 viewport.z >= bestDepth))
+            if (screenDistance > bestScreenDistance + 0.01f ||
+                (Mathf.Abs(screenDistance - bestScreenDistance) <= 0.01f &&
+                 depth >= bestDepth))
             {
                 continue;
             }
 
             bestScreenDistance = screenDistance;
-            bestDepth = viewport.z;
+            bestDepth = depth;
             pieceId = pair.Key;
             found = true;
         }
 
         return found;
+    }
+
+    private static bool TryGetVisualScreenScore(
+        NetworkPieceVisual visual,
+        Camera viewCamera,
+        Plane[] frustumPlanes,
+        Vector2 screenPoint,
+        out float screenDistance,
+        out float depth)
+    {
+        screenDistance = float.PositiveInfinity;
+        depth = float.PositiveInfinity;
+        bool found = false;
+
+        if (visual.Renderers == null)
+        {
+            return false;
+        }
+
+        foreach (Renderer pieceRenderer in visual.Renderers)
+        {
+            if (pieceRenderer == null || !pieceRenderer.enabled)
+            {
+                continue;
+            }
+
+            Bounds bounds = pieceRenderer.bounds;
+
+            if (!GeometryUtility.TestPlanesAABB(frustumPlanes, bounds) ||
+                !TryGetProjectedBoundsScreenDistance(
+                    viewCamera,
+                    bounds,
+                    screenPoint,
+                    out float rendererDistance,
+                    out float rendererDepth))
+            {
+                continue;
+            }
+
+            if (rendererDistance > screenDistance + 0.01f ||
+                (Mathf.Abs(rendererDistance - screenDistance) <= 0.01f &&
+                 rendererDepth >= depth))
+            {
+                continue;
+            }
+
+            screenDistance = rendererDistance;
+            depth = rendererDepth;
+            found = true;
+        }
+
+        return found;
+    }
+
+    private static bool TryGetProjectedBoundsScreenDistance(
+        Camera viewCamera,
+        Bounds bounds,
+        Vector2 screenPoint,
+        out float screenDistance,
+        out float depth)
+    {
+        screenDistance = float.PositiveInfinity;
+        depth = float.PositiveInfinity;
+
+        if (bounds.Contains(viewCamera.transform.position))
+        {
+            screenDistance = 0f;
+            depth = 0f;
+            return true;
+        }
+
+        Vector3 minimum = bounds.min;
+        Vector3 maximum = bounds.max;
+        float minimumX = float.PositiveInfinity;
+        float minimumY = float.PositiveInfinity;
+        float maximumX = float.NegativeInfinity;
+        float maximumY = float.NegativeInfinity;
+        bool foundProjectedCorner = false;
+
+        for (int cornerIndex = 0; cornerIndex < 8; cornerIndex++)
+        {
+            Vector3 corner = new(
+                (cornerIndex & 1) == 0 ? minimum.x : maximum.x,
+                (cornerIndex & 2) == 0 ? minimum.y : maximum.y,
+                (cornerIndex & 4) == 0 ? minimum.z : maximum.z);
+            Vector3 projectedCorner = viewCamera.WorldToScreenPoint(corner);
+
+            if (projectedCorner.z <= viewCamera.nearClipPlane)
+            {
+                continue;
+            }
+
+            minimumX = Mathf.Min(minimumX, projectedCorner.x);
+            minimumY = Mathf.Min(minimumY, projectedCorner.y);
+            maximumX = Mathf.Max(maximumX, projectedCorner.x);
+            maximumY = Mathf.Max(maximumY, projectedCorner.y);
+            foundProjectedCorner = true;
+        }
+
+        if (!foundProjectedCorner)
+        {
+            return false;
+        }
+
+        Vector2 closestScreenPoint = new(
+            Mathf.Clamp(screenPoint.x, minimumX, maximumX),
+            Mathf.Clamp(screenPoint.y, minimumY, maximumY));
+        screenDistance = (screenPoint - closestScreenPoint).sqrMagnitude;
+
+        Ray pointerRay = viewCamera.ScreenPointToRay(screenPoint);
+        depth = bounds.IntersectRay(pointerRay, out float rayDistance)
+            ? rayDistance
+            : Vector3.Dot(
+                bounds.center - viewCamera.transform.position,
+                viewCamera.transform.forward);
+        return true;
+    }
+
+    public bool TryGetRepresentativePieceHeight(out float height)
+    {
+        height = 0f;
+        Dictionary<ChessPieceType, float> heightByType = new();
+        Vector3 up = BoardUp;
+
+        foreach (NetworkPieceVisual visual in networkPieceVisuals.Values)
+        {
+            if (!TryGetVisualBounds(visual, out Bounds bounds))
+            {
+                continue;
+            }
+
+            Vector3 extents = bounds.extents;
+            float projectedHeight = 2f * (
+                Mathf.Abs(up.x) * extents.x +
+                Mathf.Abs(up.y) * extents.y +
+                Mathf.Abs(up.z) * extents.z);
+
+            if (projectedHeight <= 0.001f)
+            {
+                continue;
+            }
+
+            if (!heightByType.TryGetValue(visual.PieceType, out float existingHeight) ||
+                projectedHeight > existingHeight)
+            {
+                heightByType[visual.PieceType] = projectedHeight;
+            }
+        }
+
+        if (heightByType.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (float pieceHeight in heightByType.Values)
+        {
+            height += pieceHeight;
+        }
+
+        height /= heightByType.Count;
+        return true;
     }
 
     public void ShowVoiceQuestionMark(ushort pieceId, float duration = 1f)
@@ -353,16 +522,35 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         voiceQuestionMark.SetActive(true);
     }
 
-    public void SetEditorVoiceTarget(ushort? pieceId)
+    public void SetVoiceSelectionTarget(ushort? pieceId)
     {
-#if UNITY_EDITOR
-        editorVoiceTargetPieceId = pieceId.HasValue ? pieceId.Value : -1;
+        voiceSelectionPieceId = pieceId.HasValue ? pieceId.Value : -1;
 
-        if (editorVoiceTargetPieceId < 0 && editorVoiceTargetMarker != null)
+        if (voiceSelectionPieceId < 0 && voiceSelectionMarker != null)
         {
-            editorVoiceTargetMarker.SetActive(false);
+            voiceSelectionMarker.SetActive(false);
         }
-#endif
+    }
+
+    public void SetVoiceCommandTarget(ushort? pieceId, float duration = -1f)
+    {
+        voiceCommandPieceId = pieceId.HasValue ? pieceId.Value : -1;
+        voiceCommandMarkerExpiresAt = duration > 0f
+            ? Time.unscaledTime + duration
+            : float.PositiveInfinity;
+
+        if (voiceCommandPieceId < 0 && voiceCommandMarker != null)
+        {
+            voiceCommandMarker.SetActive(false);
+        }
+    }
+
+    public void HoldVoiceCommandTarget(float duration = 1f)
+    {
+        if (voiceCommandPieceId >= 0)
+        {
+            voiceCommandMarkerExpiresAt = Time.unscaledTime + Mathf.Max(0.1f, duration);
+        }
     }
 
     public bool TryGetSquareFromScreenPoint(
@@ -511,13 +699,10 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
             visual.Instance.name =
                 $"{pieceState.OwnerTeam}_{pieceState.PieceType}_" +
-                $"{GetSquareName(pieceState.File, pieceState.Rank)}_" +
-                $"Depth{pieceState.StackDepth}_Id{pieceState.Id}";
+                $"Id{pieceState.Id}";
             visual.Team = pieceState.OwnerTeam;
             visual.PieceType = pieceState.PieceType;
-            visual.TargetPosition =
-                GetBoardWorldPosition(pieceState.BoardFile, pieceState.BoardRank) +
-                PlacementRotation * Vector3.up * (pieceState.StackDepth * stackHeight);
+            visual.TargetPosition = GetNetworkPiecePosition(pieceState);
             visual.TargetRotation = GetNetworkPieceRotation(prefab, pieceState);
         }
 
@@ -548,9 +733,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         GameObject prefab,
         NetworkChessPieceState pieceState)
     {
-        Vector3 position =
-            GetBoardWorldPosition(pieceState.BoardFile, pieceState.BoardRank) +
-            PlacementRotation * Vector3.up * (pieceState.StackDepth * stackHeight);
+        Vector3 position = GetNetworkPiecePosition(pieceState);
         Quaternion rotation = GetNetworkPieceRotation(prefab, pieceState);
         GameObject instance = Instantiate(prefab, position, rotation, generatedRoot);
 
@@ -652,48 +835,79 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         }
     }
 
-#if UNITY_EDITOR
-    private void UpdateEditorVoiceTargetMarker()
+    private void UpdateVoiceTargetMarkers()
     {
-        if (editorVoiceTargetPieceId < 0 ||
-            !networkPieceVisuals.TryGetValue(
-                (ushort)editorVoiceTargetPieceId,
-                out NetworkPieceVisual visual) ||
+        if (voiceCommandPieceId >= 0 &&
+            Time.unscaledTime >= voiceCommandMarkerExpiresAt)
+        {
+            voiceCommandPieceId = -1;
+        }
+
+        UpdateVoiceTargetMarker(
+            ref voiceSelectionMarker,
+            ref voiceSelectionMaterial,
+            voiceSelectionPieceId,
+            "Voice Gaze Selection",
+            new Color(0.1f, 0.45f, 1f, 1f),
+            0.46f,
+            0.025f);
+        UpdateVoiceTargetMarker(
+            ref voiceCommandMarker,
+            ref voiceCommandMaterial,
+            voiceCommandPieceId,
+            "Voice Command Receiver",
+            new Color(0.1f, 1f, 0.25f, 1f),
+            0.34f,
+            0.04f);
+    }
+
+    private void UpdateVoiceTargetMarker(
+        ref GameObject markerObject,
+        ref Material markerMaterial,
+        int pieceId,
+        string markerName,
+        Color color,
+        float radiusScale,
+        float heightScale)
+    {
+        if (pieceId < 0 ||
+            !networkPieceVisuals.TryGetValue((ushort)pieceId, out NetworkPieceVisual visual) ||
             visual.Instance == null)
         {
-            if (editorVoiceTargetMarker != null)
+            if (markerObject != null)
             {
-                editorVoiceTargetMarker.SetActive(false);
+                markerObject.SetActive(false);
             }
 
             return;
         }
 
-        if (editorVoiceTargetMarker == null)
+        if (markerObject == null)
         {
-            editorVoiceTargetMarker = new GameObject("Editor Voice Gaze Target");
-            LineRenderer lineRenderer = editorVoiceTargetMarker.AddComponent<LineRenderer>();
+            markerObject = new GameObject(markerName);
+            LineRenderer lineRenderer = markerObject.AddComponent<LineRenderer>();
             lineRenderer.useWorldSpace = true;
             lineRenderer.loop = true;
             lineRenderer.positionCount = 48;
             lineRenderer.startWidth = Mathf.Min(fileSpacing, rankSpacing) * 0.035f;
             lineRenderer.endWidth = lineRenderer.startWidth;
-            lineRenderer.startColor = Color.cyan;
-            lineRenderer.endColor = Color.cyan;
+            lineRenderer.startColor = color;
+            lineRenderer.endColor = color;
             lineRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             lineRenderer.receiveShadows = false;
             Shader shader = Shader.Find("Sprites/Default");
 
             if (shader != null)
             {
-                editorVoiceTargetMaterial = new Material(shader) { color = Color.cyan };
-                lineRenderer.sharedMaterial = editorVoiceTargetMaterial;
+                markerMaterial = new Material(shader) { color = color };
+                lineRenderer.sharedMaterial = markerMaterial;
             }
         }
 
-        float radius = Mathf.Min(fileSpacing, rankSpacing) * 0.43f;
-        Vector3 centre = visual.TargetPosition + BoardUp * 0.04f;
-        LineRenderer marker = editorVoiceTargetMarker.GetComponent<LineRenderer>();
+        float squareSize = Mathf.Min(fileSpacing, rankSpacing);
+        float radius = squareSize * radiusScale;
+        Vector3 centre = visual.TargetPosition + BoardUp * (squareSize * heightScale);
+        LineRenderer marker = markerObject.GetComponent<LineRenderer>();
 
         for (int index = 0; index < marker.positionCount; index++)
         {
@@ -704,9 +918,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
                 BoardForward * (Mathf.Sin(angle) * radius));
         }
 
-        editorVoiceTargetMarker.SetActive(true);
+        markerObject.SetActive(true);
     }
-#endif
 
     private Quaternion GetNetworkPieceRotation(
         GameObject prefab,
@@ -716,10 +929,47 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             ? whiteRotationOffset
             : blackRotationOffset;
 
-        return PlacementRotation *
-               Quaternion.Euler(0f, pieceState.VoiceHeading, 0f) *
-               Quaternion.Euler(rotationOffset) *
-               prefab.transform.rotation;
+        Quaternion rotation = PlacementRotation *
+                              Quaternion.Euler(0f, pieceState.VoiceHeading, 0f) *
+                              Quaternion.Euler(rotationOffset) *
+                              prefab.transform.rotation;
+        float fallProgress = GetRingOutProgress(pieceState, out Vector2 outwardDirection);
+
+        if (fallProgress <= 0f)
+        {
+            return rotation;
+        }
+
+        Vector3 worldOutward =
+            BoardRight * outwardDirection.x + BoardForward * outwardDirection.y;
+        Vector3 tiltAxis = Vector3.Cross(worldOutward, BoardUp).normalized;
+        return Quaternion.AngleAxis(ringOutTiltAngle * fallProgress, tiltAxis) * rotation;
+    }
+
+    private Vector3 GetNetworkPiecePosition(NetworkChessPieceState pieceState)
+    {
+        Vector3 position =
+            GetBoardWorldPosition(pieceState.BoardFile, pieceState.BoardRank);
+        float fallProgress = GetRingOutProgress(pieceState, out _);
+        float squareSize = Mathf.Min(fileSpacing, rankSpacing);
+        return position - BoardUp *
+            (fallProgress * fallProgress * ringOutDropDistance * squareSize);
+    }
+
+    private float GetRingOutProgress(
+        NetworkChessPieceState pieceState,
+        out Vector2 outwardDirection)
+    {
+        Vector2 position = new(pieceState.BoardFile, pieceState.BoardRank);
+        Vector2 closestPoint = new(
+            Mathf.Clamp(position.x, GroundMinimumCoordinate, GroundMaximumCoordinate),
+            Mathf.Clamp(position.y, GroundMinimumCoordinate, GroundMaximumCoordinate));
+        Vector2 outsideOffset = position - closestPoint;
+        float outsideDistance = outsideOffset.magnitude;
+        outwardDirection = outsideDistance > 0.0001f
+            ? outsideOffset / outsideDistance
+            : Vector2.zero;
+        return Mathf.Clamp01(outsideDistance / ringOutVisualDistance);
     }
 
     private void CreateGeneratedRoot()
@@ -777,12 +1027,15 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             Destroy(selectionMarkerMaterial);
         }
 
-#if UNITY_EDITOR
-        if (editorVoiceTargetMaterial != null)
+        if (voiceSelectionMaterial != null)
         {
-            Destroy(editorVoiceTargetMaterial);
+            Destroy(voiceSelectionMaterial);
         }
-#endif
+
+        if (voiceCommandMaterial != null)
+        {
+            Destroy(voiceCommandMaterial);
+        }
     }
 
     private void SpawnSide(
@@ -904,7 +1157,10 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     {
         fileSpacing = Mathf.Max(0.001f, fileSpacing);
         rankSpacing = Mathf.Max(0.001f, rankSpacing);
-        stackHeight = Mathf.Max(0f, stackHeight);
+        boardBorderWidthInSquares = Mathf.Max(0f, boardBorderWidthInSquares);
+        ringOutVisualDistance = Mathf.Max(0.1f, ringOutVisualDistance);
+        ringOutDropDistance = Mathf.Max(0.1f, ringOutDropDistance);
+        ringOutTiltAngle = Mathf.Clamp(ringOutTiltAngle, 0f, 120f);
         selectionMarkerSegments = Mathf.Clamp(selectionMarkerSegments, 16, 96);
     }
 }

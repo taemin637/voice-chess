@@ -11,7 +11,8 @@ committed to the project.
 1. Create an Azure Speech resource and copy its key and region.
 2. In Unity, open **Voice Chess > Azure Speech Settings**.
 3. Enter the resource key and region (for example, `koreacentral`) and save.
-4. Start a multiplayer match. Move with **WASD** and look with the mouse.
+4. Start a multiplayer match. Move with **WASD**, jump with **Space**, and look
+   with the mouse.
    Automatic voice activation is the default. Switch to **HOLD [V]** in Voice
    Settings when push-to-talk is preferable.
 
@@ -60,7 +61,11 @@ Only a final Azure N-best candidate that maps to this closed command set and
 has at least 0.55 confidence is executed. Other speech is shown but rejected.
 The 80th-percentile microphone loudness measured during the utterance controls
 the command reach. A quiet command reaches nearby pieces; a firm, loud command
-reaches beyond the board diagonal. No piece/commander collision is applied yet.
+reaches beyond the board diagonal. A player's capsule passes through friendly
+pieces, but enemy pieces block the player. Knockback only occurs when a moving
+enemy piece hits the player along its direction of travel; walking into a still
+piece or into the side of a moving piece does not cause a bounce. The piece keeps
+almost all of its existing momentum while the lighter player takes the impact.
 The intentionally directionless `옆으로 돌아` phrase starts continuous
 clockwise/right rotation so that its behavior is deterministic. Movement and
 rotation commands remain active together until `멈춰` is recognized.

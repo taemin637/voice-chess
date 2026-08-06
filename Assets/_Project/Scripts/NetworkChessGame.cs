@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
-using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 public enum ChessPieceType : byte
 {
@@ -16,25 +14,6 @@ public enum ChessPieceType : byte
     King
 }
 
-public enum ChessMoveResult : byte
-{
-    Accepted,
-    InvalidSquare,
-    PlayerNotFound,
-    TeamNotSelected,
-    NotYourTurn,
-    NoPieceOnSource,
-    NotYourStack,
-    OwnStackOnDestination,
-    IllegalMove,
-    MustContinueActiveStack,
-    StackHasNoLegalMove,
-    KingCaptureMustBeFirstMove,
-    KingCannotCaptureStack,
-    PromotionRequired,
-    GameAlreadyFinished
-}
-
 public struct NetworkChessPieceState :
     INetworkSerializable,
     IEquatable<NetworkChessPieceState>
@@ -42,37 +21,35 @@ public struct NetworkChessPieceState :
     public ushort Id;
     public PlayerTeam OwnerTeam;
     public ChessPieceType PieceType;
-    public byte File;
-    public byte Rank;
-    public byte StackDepth;
-    public byte NextMoveDepth;
-    public bool HasMoved;
     public float BoardFile;
     public float BoardRank;
     public float VoiceHeading;
     public sbyte VoiceMoveAxis;
     public sbyte VoiceTurnAxis;
+    public float VoiceMoveLoudness;
+    public float VoiceTurnLoudness;
+    public float KnockbackFileVelocity;
+    public float KnockbackRankVelocity;
 
     public NetworkChessPieceState(
         ushort id,
         PlayerTeam ownerTeam,
         ChessPieceType pieceType,
-        int file,
-        int rank)
+        float boardFile,
+        float boardRank)
     {
         Id = id;
         OwnerTeam = ownerTeam;
         PieceType = pieceType;
-        File = (byte)file;
-        Rank = (byte)rank;
-        StackDepth = 0;
-        NextMoveDepth = 0;
-        HasMoved = false;
-        BoardFile = file;
-        BoardRank = rank;
+        BoardFile = boardFile;
+        BoardRank = boardRank;
         VoiceHeading = 0f;
         VoiceMoveAxis = 0;
         VoiceTurnAxis = 0;
+        VoiceMoveLoudness = 0.5f;
+        VoiceTurnLoudness = 0.5f;
+        KnockbackFileVelocity = 0f;
+        KnockbackRankVelocity = 0f;
     }
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer)
@@ -81,16 +58,15 @@ public struct NetworkChessPieceState :
         serializer.SerializeValue(ref Id);
         serializer.SerializeValue(ref OwnerTeam);
         serializer.SerializeValue(ref PieceType);
-        serializer.SerializeValue(ref File);
-        serializer.SerializeValue(ref Rank);
-        serializer.SerializeValue(ref StackDepth);
-        serializer.SerializeValue(ref NextMoveDepth);
-        serializer.SerializeValue(ref HasMoved);
         serializer.SerializeValue(ref BoardFile);
         serializer.SerializeValue(ref BoardRank);
         serializer.SerializeValue(ref VoiceHeading);
         serializer.SerializeValue(ref VoiceMoveAxis);
         serializer.SerializeValue(ref VoiceTurnAxis);
+        serializer.SerializeValue(ref VoiceMoveLoudness);
+        serializer.SerializeValue(ref VoiceTurnLoudness);
+        serializer.SerializeValue(ref KnockbackFileVelocity);
+        serializer.SerializeValue(ref KnockbackRankVelocity);
     }
 
     public bool Equals(NetworkChessPieceState other)
@@ -98,91 +74,81 @@ public struct NetworkChessPieceState :
         return Id == other.Id &&
                OwnerTeam == other.OwnerTeam &&
                PieceType == other.PieceType &&
-               File == other.File &&
-               Rank == other.Rank &&
-               StackDepth == other.StackDepth &&
-               NextMoveDepth == other.NextMoveDepth &&
-               HasMoved == other.HasMoved &&
                BoardFile.Equals(other.BoardFile) &&
                BoardRank.Equals(other.BoardRank) &&
-               VoiceHeading == other.VoiceHeading &&
+               VoiceHeading.Equals(other.VoiceHeading) &&
                VoiceMoveAxis == other.VoiceMoveAxis &&
-               VoiceTurnAxis == other.VoiceTurnAxis;
+               VoiceTurnAxis == other.VoiceTurnAxis &&
+               VoiceMoveLoudness.Equals(other.VoiceMoveLoudness) &&
+               VoiceTurnLoudness.Equals(other.VoiceTurnLoudness) &&
+               KnockbackFileVelocity.Equals(other.KnockbackFileVelocity) &&
+               KnockbackRankVelocity.Equals(other.KnockbackRankVelocity);
     }
 }
 
+[DisallowMultipleComponent]
 public sealed class NetworkChessGame : NetworkBehaviour
 {
+    private readonly struct LocalVoiceGazeSample
+    {
+        public readonly float Time;
+        public readonly int PieceId;
+        public readonly float DistanceInSquares;
+
+        public LocalVoiceGazeSample(
+            float time,
+            int pieceId,
+            float distanceInSquares)
+        {
+            Time = time;
+            PieceId = pieceId;
+            DistanceInSquares = distanceInSquares;
+        }
+    }
+
     [SerializeField] private ChessPieceSpawner pieceSpawner;
 
     [Header("Voice Free Movement")]
     [SerializeField, Min(0.05f)] private float voiceMoveSpeed = 0.85f;
     [SerializeField, Min(5f)] private float voiceTurnSpeed = 90f;
+    [SerializeField, Range(0.05f, 1f)] private float quietVoiceSpeedMultiplier = 0.25f;
+    [SerializeField, Range(1f, 3f)] private float loudVoiceSpeedMultiplier = 1.75f;
+
+    [Header("Piece Collision and Ring Out")]
+    [Tooltip("Collision radius measured in chess-square units.")]
+    [SerializeField, Range(0.2f, 0.49f)] private float pieceCollisionRadius = 0.36f;
+    [Tooltip("How strongly pieces bounce apart. 0 is inelastic, 1 is fully elastic.")]
+    [SerializeField, Range(0f, 1f)] private float collisionRestitution = 0.72f;
+    [Tooltip("Extra multiplier for the impulse produced by a collision.")]
+    [SerializeField, Range(0.5f, 2f)] private float collisionImpulseMultiplier = 1.15f;
+    [Tooltip("How quickly collision knockback loses speed.")]
+    [SerializeField, Min(0f)] private float knockbackDrag = 1.8f;
+    [Tooltip("Distance past the board edge before a piece is removed.")]
+    [SerializeField, Min(0.1f)] private float ringOutDistance = 0.8f;
+    [Tooltip("Players above this height (in square units) have jumped over pieces.")]
+    [SerializeField, Min(0.1f)] private float playerPieceCollisionHeight = 0.6f;
+    [Tooltip("Minimum piece speed required before it can knock a player back.")]
+    [SerializeField, Min(0f)] private float minimumPlayerImpactSpeed = 0.08f;
+    [Tooltip("How closely the contact must face the piece's travel direction. 0 is any forward contact, 1 is head-on only.")]
+    [SerializeField, Range(0f, 1f)] private float minimumPlayerImpactAlignment = 0.25f;
 
     private readonly NetworkList<NetworkChessPieceState> _pieces = new(
         readPerm: NetworkVariableReadPermission.Everyone,
         writePerm: NetworkVariableWritePermission.Server);
-
-    private readonly NetworkVariable<PlayerTeam> _currentTurn = new(
-        PlayerTeam.White,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
 
     private readonly NetworkVariable<PlayerTeam> _winner = new(
         PlayerTeam.Unassigned,
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
-    private readonly NetworkVariable<FixedString64Bytes> _lastMove = new(
-        new FixedString64Bytes("No moves yet."),
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    private readonly NetworkVariable<bool> _sequenceActive = new(
-        false,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    private readonly NetworkVariable<byte> _activeFile = new(
-        0,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    private readonly NetworkVariable<byte> _activeRank = new(
-        0,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    private readonly NetworkVariable<byte> _activeMoveDepth = new(
-        0,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    private readonly NetworkVariable<bool> _promotionPending = new(
-        false,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    private readonly NetworkVariable<ushort> _promotionPieceId = new(
-        0,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    private readonly NetworkVariable<bool> _promotionEndsTurn = new(
-        false,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    private string _moveStatus = "Select a stack or enter a move.";
-    private int _selectedFile = -1;
-    private int _selectedRank = -1;
-    private int _selectedPieceId = -1;
+    private readonly List<LocalVoiceGazeSample> _localVoiceGazeHistory = new();
     private int _localVoiceTargetPieceId = -1;
     private float _localCommanderFile = 3.5f;
     private float _localCommanderRank = 3.5f;
     private bool _visualRefreshPending;
 
-    public PlayerTeam CurrentTurn => _currentTurn.Value;
+    public PlayerTeam Winner => _winner.Value;
+
     public bool HasLocalVoiceSelection =>
         _localVoiceTargetPieceId >= 0 &&
         FindPieceIndexById((ushort)_localVoiceTargetPieceId) >= 0;
@@ -206,38 +172,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         _pieces.OnListChanged -= HandlePiecesChanged;
-        ClearSelection();
-    }
-
-    private void Update()
-    {
-        if (!IsSpawned || pieceSpawner == null)
-        {
-            return;
-        }
-
-        RefreshLocalSequenceSelection();
-
-        if (SessionManager.IsFrontEndVisible || InGameVoiceSettingsUI.IsOpen)
-        {
-            return;
-        }
-
-        Mouse mouse = Mouse.current;
-
-        if (mouse == null || !mouse.leftButton.wasPressedThisFrame)
-        {
-            return;
-        }
-
-        if (pieceSpawner.TryGetSquareFromScreenPoint(
-                Camera.main,
-                mouse.position.ReadValue(),
-                out int file,
-                out int rank))
-        {
-            HandleSquareClicked(file, rank);
-        }
+        ClearLocalVoiceTarget();
     }
 
     private void FixedUpdate()
@@ -247,48 +182,49 @@ public sealed class NetworkChessGame : NetworkBehaviour
             return;
         }
 
+        float deltaTime = Time.fixedDeltaTime;
+        List<NetworkChessPieceState> simulatedPieces = new(_pieces.Count);
+        List<Vector2> commandedVelocities = new(_pieces.Count);
+
         for (int index = 0; index < _pieces.Count; index++)
         {
             NetworkChessPieceState piece = _pieces[index];
 
-            if (piece.VoiceMoveAxis == 0 && piece.VoiceTurnAxis == 0)
-            {
-                continue;
-            }
-
             if (piece.VoiceTurnAxis != 0)
             {
+                float turnSpeed = voiceTurnSpeed * GetVoiceSpeedMultiplier(
+                    piece.VoiceTurnLoudness);
                 piece.VoiceHeading = Mathf.Repeat(
                     piece.VoiceHeading +
-                    piece.VoiceTurnAxis * voiceTurnSpeed * Time.fixedDeltaTime,
+                    piece.VoiceTurnAxis * turnSpeed * deltaTime,
                     360f);
             }
 
-            if (piece.VoiceMoveAxis != 0)
+            Vector2 commandedVelocity = GetCommandedVelocity(piece);
+            Vector2 knockbackVelocity = new(
+                piece.KnockbackFileVelocity,
+                piece.KnockbackRankVelocity);
+            knockbackVelocity *= Mathf.Exp(-knockbackDrag * deltaTime);
+
+            if (knockbackVelocity.sqrMagnitude < 0.0001f)
             {
-                Vector2 direction = GetVoiceMoveDirection(
-                    piece.OwnerTeam,
-                    piece.VoiceHeading) * piece.VoiceMoveAxis;
-                Vector2 current = new(piece.BoardFile, piece.BoardRank);
-                Vector2 next = current + direction * (voiceMoveSpeed * Time.fixedDeltaTime);
-                bool reachedBoundary =
-                    next.x < 0f || next.x > 7f || next.y < 0f || next.y > 7f;
-                next.x = Mathf.Clamp(next.x, 0f, 7f);
-                next.y = Mathf.Clamp(next.y, 0f, 7f);
-
-                piece.BoardFile = next.x;
-                piece.BoardRank = next.y;
-                piece.File = (byte)Mathf.Clamp(Mathf.RoundToInt(next.x), 0, 7);
-                piece.Rank = (byte)Mathf.Clamp(Mathf.RoundToInt(next.y), 0, 7);
-
-                if (reachedBoundary)
-                {
-                    piece.VoiceMoveAxis = 0;
-                }
+                knockbackVelocity = Vector2.zero;
             }
 
-            _pieces[index] = piece;
+            Vector2 position = new(piece.BoardFile, piece.BoardRank);
+            position += (commandedVelocity + knockbackVelocity) * deltaTime;
+
+            piece.BoardFile = position.x;
+            piece.BoardRank = position.y;
+            piece.KnockbackFileVelocity = knockbackVelocity.x;
+            piece.KnockbackRankVelocity = knockbackVelocity.y;
+            simulatedPieces.Add(piece);
+            commandedVelocities.Add(commandedVelocity);
         }
+
+        ResolvePieceCollisions(simulatedPieces, commandedVelocities);
+        RemoveRingedOutPieces(simulatedPieces);
+        ApplySimulatedState(simulatedPieces);
     }
 
     private void LateUpdate()
@@ -299,7 +235,6 @@ public sealed class NetworkChessGame : NetworkBehaviour
         }
 
         _visualRefreshPending = false;
-
         List<NetworkChessPieceState> visualStates = new(_pieces.Count);
 
         for (int index = 0; index < _pieces.Count; index++)
@@ -308,13 +243,18 @@ public sealed class NetworkChessGame : NetworkBehaviour
         }
 
         pieceSpawner.RebuildFromNetworkState(visualStates);
+
+        if (_localVoiceTargetPieceId >= 0 &&
+            FindPieceIndexById((ushort)_localVoiceTargetPieceId) < 0)
+        {
+            ClearLocalVoiceTarget();
+        }
     }
 
     private void InitializePieces()
     {
         _pieces.Clear();
         ushort nextId = 0;
-
         ChessPieceType[] backRank =
         {
             ChessPieceType.Rook,
@@ -330,22 +270,16 @@ public sealed class NetworkChessGame : NetworkBehaviour
         for (int file = 0; file < 8; file++)
         {
             _pieces.Add(new NetworkChessPieceState(
-                nextId++, PlayerTeam.White, backRank[file], file, 0));
+                nextId++, PlayerTeam.White, backRank[file], file, 0f));
             _pieces.Add(new NetworkChessPieceState(
-                nextId++, PlayerTeam.White, ChessPieceType.Pawn, file, 1));
+                nextId++, PlayerTeam.White, ChessPieceType.Pawn, file, 1f));
             _pieces.Add(new NetworkChessPieceState(
-                nextId++, PlayerTeam.Black, ChessPieceType.Pawn, file, 6));
+                nextId++, PlayerTeam.Black, ChessPieceType.Pawn, file, 6f));
             _pieces.Add(new NetworkChessPieceState(
-                nextId++, PlayerTeam.Black, backRank[file], file, 7));
+                nextId++, PlayerTeam.Black, backRank[file], file, 7f));
         }
 
-        _currentTurn.Value = PlayerTeam.White;
         _winner.Value = PlayerTeam.Unassigned;
-        _lastMove.Value = new FixedString64Bytes("No moves yet.");
-        ClearServerSequence();
-        _promotionPending.Value = false;
-        _promotionPieceId.Value = 0;
-        _promotionEndsTurn.Value = false;
     }
 
     private void HandlePiecesChanged(
@@ -354,248 +288,259 @@ public sealed class NetworkChessGame : NetworkBehaviour
         _visualRefreshPending = true;
     }
 
-    private void RefreshLocalSequenceSelection()
+    private Vector2 GetCommandedVelocity(NetworkChessPieceState piece)
     {
-        if (!TryGetLocalPlayer(out NetworkPlayer localPlayer))
+        if (piece.VoiceMoveAxis == 0)
         {
-            return;
+            return Vector2.zero;
         }
 
-        if (localPlayer.Team != _currentTurn.Value)
+        float moveSpeed = voiceMoveSpeed * GetVoiceSpeedMultiplier(
+            piece.VoiceMoveLoudness);
+        return GetVoiceMoveDirection(piece.OwnerTeam, piece.VoiceHeading) *
+               (piece.VoiceMoveAxis * moveSpeed);
+    }
+
+    private void ResolvePieceCollisions(
+        List<NetworkChessPieceState> pieces,
+        List<Vector2> commandedVelocities)
+    {
+        float minimumDistance = pieceCollisionRadius * 2f;
+        float minimumDistanceSquared = minimumDistance * minimumDistance;
+
+        for (int leftIndex = 0; leftIndex < pieces.Count - 1; leftIndex++)
         {
-            if (HasSelectedSquare)
+            for (int rightIndex = leftIndex + 1; rightIndex < pieces.Count; rightIndex++)
             {
-                ClearSelection();
+                NetworkChessPieceState left = pieces[leftIndex];
+                NetworkChessPieceState right = pieces[rightIndex];
+                Vector2 leftPosition = new(left.BoardFile, left.BoardRank);
+                Vector2 rightPosition = new(right.BoardFile, right.BoardRank);
+                Vector2 separation = rightPosition - leftPosition;
+                float distanceSquared = separation.sqrMagnitude;
+
+                if (distanceSquared >= minimumDistanceSquared)
+                {
+                    continue;
+                }
+
+                float distance = Mathf.Sqrt(distanceSquared);
+                Vector2 normal = distance > 0.0001f
+                    ? separation / distance
+                    : GetStableCollisionNormal(left.Id, right.Id);
+                float leftInverseMass = 1f / GetPieceMass(left.PieceType);
+                float rightInverseMass = 1f / GetPieceMass(right.PieceType);
+                float inverseMassSum = leftInverseMass + rightInverseMass;
+                float penetration = minimumDistance - distance;
+                Vector2 correction = normal * (penetration / inverseMassSum);
+
+                leftPosition -= correction * leftInverseMass;
+                rightPosition += correction * rightInverseMass;
+
+                Vector2 leftVelocity = commandedVelocities[leftIndex] +
+                    new Vector2(left.KnockbackFileVelocity, left.KnockbackRankVelocity);
+                Vector2 rightVelocity = commandedVelocities[rightIndex] +
+                    new Vector2(right.KnockbackFileVelocity, right.KnockbackRankVelocity);
+                float closingSpeed = Vector2.Dot(rightVelocity - leftVelocity, normal);
+
+                if (closingSpeed < 0f)
+                {
+                    float impulseMagnitude =
+                        -(1f + collisionRestitution) * closingSpeed /
+                        inverseMassSum * collisionImpulseMultiplier;
+                    Vector2 impulse = normal * impulseMagnitude;
+                    leftVelocity -= impulse * leftInverseMass;
+                    rightVelocity += impulse * rightInverseMass;
+
+                    Vector2 leftKnockback = leftVelocity - commandedVelocities[leftIndex];
+                    Vector2 rightKnockback = rightVelocity - commandedVelocities[rightIndex];
+                    left.KnockbackFileVelocity = leftKnockback.x;
+                    left.KnockbackRankVelocity = leftKnockback.y;
+                    right.KnockbackFileVelocity = rightKnockback.x;
+                    right.KnockbackRankVelocity = rightKnockback.y;
+                }
+
+                left.BoardFile = leftPosition.x;
+                left.BoardRank = leftPosition.y;
+                right.BoardFile = rightPosition.x;
+                right.BoardRank = rightPosition.y;
+                pieces[leftIndex] = left;
+                pieces[rightIndex] = right;
+            }
+        }
+    }
+
+    private void RemoveRingedOutPieces(List<NetworkChessPieceState> pieces)
+    {
+        for (int index = pieces.Count - 1; index >= 0; index--)
+        {
+            if (!IsRingedOut(pieces[index]))
+            {
+                continue;
             }
 
-            return;
+            HandleRingOut(pieces[index]);
+            pieces.RemoveAt(index);
         }
-
-        if (!_sequenceActive.Value)
-        {
-            return;
-        }
-
-        int activeFile = _activeFile.Value;
-        int activeRank = _activeRank.Value;
-
-        if (_selectedFile == activeFile && _selectedRank == activeRank)
-        {
-            return;
-        }
-
-        _selectedFile = activeFile;
-        _selectedRank = activeRank;
-
-        List<int> stack = GetStackIndicesAt(activeFile, activeRank);
-        int movementPieceIndex = FindPieceIndexAtDepth(
-            stack,
-            _activeMoveDepth.Value);
-
-        if (movementPieceIndex >= 0)
-        {
-            _selectedPieceId = _pieces[movementPieceIndex].Id;
-        }
-
-        pieceSpawner.ShowSelection(activeFile, activeRank);
     }
 
-    private bool TryGetLocalPlayer(out NetworkPlayer localPlayer)
+    private void ApplySimulatedState(List<NetworkChessPieceState> simulatedPieces)
     {
-        localPlayer = null;
-
-        return NetworkManager != null &&
-               NetworkManager.IsListening &&
-               NetworkPlayer.TryGetByClientId(
-                   NetworkManager.LocalClientId,
-                   out localPlayer);
-    }
-
-    private void HandleSquareClicked(int file, int rank)
-    {
-        if (!NetworkPlayer.TryGetByClientId(
-                NetworkManager.LocalClientId,
-                out NetworkPlayer localPlayer))
+        for (int index = _pieces.Count - 1; index >= simulatedPieces.Count; index--)
         {
-            _moveStatus = "Local network player was not found.";
-            return;
+            _pieces.RemoveAt(index);
         }
 
-        if (localPlayer.Team != PlayerTeam.White &&
-            localPlayer.Team != PlayerTeam.Black)
+        for (int index = 0; index < simulatedPieces.Count; index++)
         {
-            _moveStatus = "Choose White or Black first.";
-            return;
-        }
-
-        if (!HasSelectedSquare)
-        {
-            TrySelectStack(file, rank, localPlayer.Team);
-            return;
-        }
-
-        if (file == _selectedFile && rank == _selectedRank)
-        {
-            ClearSelection();
-            _moveStatus = "Selection cleared.";
-            return;
-        }
-
-        int clickedTopIndex = FindTopPieceIndexAt(file, rank);
-
-        if (clickedTopIndex >= 0 &&
-            _pieces[clickedTopIndex].OwnerTeam == localPlayer.Team)
-        {
-            TrySelectStack(file, rank, localPlayer.Team);
-            return;
-        }
-
-        SubmitMove(_selectedFile, _selectedRank, file, rank);
-    }
-
-    private void TrySelectStack(int file, int rank, PlayerTeam localTeam)
-    {
-        if (_winner.Value != PlayerTeam.Unassigned)
-        {
-            _moveStatus = "The game has already finished.";
-            return;
-        }
-
-        if (localTeam != _currentTurn.Value)
-        {
-            _moveStatus = "It is not your team's turn.";
-            return;
-        }
-
-        if (_promotionPending.Value)
-        {
-            _moveStatus = "Choose a promotion piece before moving again.";
-            return;
-        }
-
-        if (_sequenceActive.Value &&
-            (file != _activeFile.Value || rank != _activeRank.Value))
-        {
-            _moveStatus = "Your team must continue with the active stack.";
-            return;
-        }
-
-        List<int> stack = GetStackIndicesAt(file, rank);
-
-        if (stack.Count == 0)
-        {
-            _moveStatus = "There is no stack on that square.";
-            return;
-        }
-
-        if (_pieces[stack[0]].OwnerTeam != localTeam)
-        {
-            _moveStatus = "That stack belongs to the other team.";
-            return;
-        }
-
-        int moveDepth = _sequenceActive.Value
-            ? _activeMoveDepth.Value
-            : GetStackCursor(stack);
-        int movementPieceIndex = FindPieceIndexAtDepth(stack, moveDepth);
-
-        if (movementPieceIndex < 0)
-        {
-            _moveStatus = "The stack movement order is invalid.";
-            return;
-        }
-
-        NetworkChessPieceState movementPiece = _pieces[movementPieceIndex];
-
-        _selectedFile = file;
-        _selectedRank = rank;
-        _selectedPieceId = movementPiece.Id;
-        pieceSpawner?.ShowSelection(
-            movementPiece.BoardFile,
-            movementPiece.BoardRank);
-        _moveStatus =
-            $"Selected {GetSquareName(file, rank)}. " +
-            $"Next: layer {moveDepth + 1} {movementPiece.PieceType}.";
-    }
-
-    private void SubmitMove(
-        int fromFile,
-        int fromRank,
-        int toFile,
-        int toRank)
-    {
-        _moveStatus = "Waiting for server...";
-        RequestMoveRpc(
-            (byte)fromFile,
-            (byte)fromRank,
-            (byte)toFile,
-            (byte)toRank);
-    }
-
-    [Rpc(
-        SendTo.Server,
-        InvokePermission = RpcInvokePermission.Everyone)]
-    private void RequestPromotionRpc(
-        ChessPieceType requestedType,
-        RpcParams rpcParams = default)
-    {
-        ulong senderClientId = rpcParams.Receive.SenderClientId;
-        bool accepted = false;
-
-        if (_promotionPending.Value &&
-            IsValidPromotionType(requestedType) &&
-            NetworkPlayer.TryGetByClientId(
-                senderClientId,
-                out NetworkPlayer player) &&
-            player.Team == _currentTurn.Value)
-        {
-            int pieceIndex = FindPieceIndexById(_promotionPieceId.Value);
-
-            if (pieceIndex >= 0 &&
-                _pieces[pieceIndex].PieceType == ChessPieceType.Pawn)
+            if (!_pieces[index].Equals(simulatedPieces[index]))
             {
-                NetworkChessPieceState promotedPiece = _pieces[pieceIndex];
-                promotedPiece.PieceType = requestedType;
-                _pieces[pieceIndex] = promotedPiece;
+                _pieces[index] = simulatedPieces[index];
+            }
+        }
+    }
 
-                bool endsTurn = _promotionEndsTurn.Value;
-                _promotionPending.Value = false;
-                _promotionPieceId.Value = 0;
-                _promotionEndsTurn.Value = false;
-                accepted = true;
+    private bool IsRingedOut(NetworkChessPieceState piece)
+    {
+        float boardMinimumEdge = pieceSpawner != null
+            ? pieceSpawner.GroundMinimumCoordinate
+            : -0.5f - ChessPieceSpawner.DefaultBoardBorderWidthInSquares;
+        float boardMaximumEdge = pieceSpawner != null
+            ? pieceSpawner.GroundMaximumCoordinate
+            : 7.5f + ChessPieceSpawner.DefaultBoardBorderWidthInSquares;
+        return piece.BoardFile < boardMinimumEdge - ringOutDistance ||
+               piece.BoardFile > boardMaximumEdge + ringOutDistance ||
+               piece.BoardRank < boardMinimumEdge - ringOutDistance ||
+               piece.BoardRank > boardMaximumEdge + ringOutDistance;
+    }
 
-                if (endsTurn)
+    private void HandleRingOut(NetworkChessPieceState piece)
+    {
+        if (piece.PieceType == ChessPieceType.King &&
+            _winner.Value == PlayerTeam.Unassigned)
+        {
+            _winner.Value = GetOpponent(piece.OwnerTeam);
+        }
+    }
+
+    private static Vector2 GetStableCollisionNormal(ushort leftId, ushort rightId)
+    {
+        float angle = ((leftId * 37 + rightId * 17) % 360) * Mathf.Deg2Rad;
+        return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+    }
+
+    private static float GetPieceMass(ChessPieceType pieceType)
+    {
+        return pieceType switch
+        {
+            ChessPieceType.Pawn => 0.8f,
+            ChessPieceType.Knight => 1.05f,
+            ChessPieceType.Bishop => 0.95f,
+            ChessPieceType.Rook => 1.35f,
+            ChessPieceType.Queen => 1.15f,
+            ChessPieceType.King => 1.4f,
+            _ => 1f
+        };
+    }
+
+    /// <summary>
+    /// Resolves a local player capsule against enemy pieces without applying the
+    /// opposite impulse to the pieces. This deliberately makes the much lighter
+    /// player take almost all of the bounce while the server-owned piece motion
+    /// remains authoritative.
+    /// </summary>
+    public bool ResolvePlayerPieceCollisions(
+        PlayerTeam playerTeam,
+        float playerBottomHeight,
+        float playerRadius,
+        ref Vector2 playerPosition,
+        ref Vector2 playerVelocity)
+    {
+        if (!IsSpawned ||
+            playerTeam == PlayerTeam.Unassigned ||
+            playerBottomHeight >= playerPieceCollisionHeight)
+        {
+            return false;
+        }
+
+        bool collided = false;
+        float minimumDistance = pieceCollisionRadius + Mathf.Max(0.01f, playerRadius);
+        float minimumDistanceSquared = minimumDistance * minimumDistance;
+
+        for (int index = 0; index < _pieces.Count; index++)
+        {
+            NetworkChessPieceState piece = _pieces[index];
+
+            // Friendly pieces are intentionally intangible to their own players.
+            if (piece.OwnerTeam == playerTeam)
+            {
+                continue;
+            }
+
+            Vector2 piecePosition = new(piece.BoardFile, piece.BoardRank);
+            Vector2 separation = playerPosition - piecePosition;
+            float distanceSquared = separation.sqrMagnitude;
+
+            if (distanceSquared >= minimumDistanceSquared)
+            {
+                continue;
+            }
+
+            float distance = Mathf.Sqrt(distanceSquared);
+            Vector2 normal;
+
+            if (distance > 0.0001f)
+            {
+                normal = separation / distance;
+            }
+            else
+            {
+                Vector2 pieceVelocityAtCentre = GetCommandedVelocity(piece) +
+                    new Vector2(
+                        piece.KnockbackFileVelocity,
+                        piece.KnockbackRankVelocity);
+                normal = pieceVelocityAtCentre.sqrMagnitude > 0.0001f
+                    ? pieceVelocityAtCentre.normalized
+                    : GetStableCollisionNormal(piece.Id, (ushort)(piece.Id + 97));
+            }
+
+            // Resolve all penetration on the player, modelling the piece as much
+            // heavier than the player.
+            playerPosition += normal * (minimumDistance - distance);
+
+            Vector2 pieceVelocity = GetCommandedVelocity(piece) +
+                new Vector2(
+                    piece.KnockbackFileVelocity,
+                    piece.KnockbackRankVelocity);
+            float pieceSpeed = pieceVelocity.magnitude;
+            float impactAlignment = pieceSpeed > 0.0001f
+                ? Vector2.Dot(pieceVelocity / pieceSpeed, normal)
+                : 0f;
+
+            // Only the piece's own forward motion can create knockback. Walking
+            // into a stationary piece, approaching a moving piece from behind,
+            // or hitting its side still resolves overlap but never bounces the
+            // player away.
+            if (pieceSpeed >= minimumPlayerImpactSpeed &&
+                impactAlignment >= minimumPlayerImpactAlignment)
+            {
+                float pieceImpactSpeed = pieceSpeed * impactAlignment;
+                float targetOutwardSpeed = pieceImpactSpeed *
+                    (1f + collisionRestitution) *
+                    collisionImpulseMultiplier;
+                float currentOutwardSpeed = Vector2.Dot(playerVelocity, normal);
+
+                if (currentOutwardSpeed < targetOutwardSpeed)
                 {
-                    EndTurn(player.Team);
+                    playerVelocity += normal *
+                        (targetOutwardSpeed - currentOutwardSpeed);
                 }
             }
+
+            collided = true;
         }
 
-        PromotionResultRpc(
-            accepted,
-            requestedType,
-            RpcTarget.Single(senderClientId, RpcTargetUse.Temp));
-    }
-
-    [Rpc(
-        SendTo.SpecifiedInParams,
-        InvokePermission = RpcInvokePermission.Server)]
-    private void PromotionResultRpc(
-        bool accepted,
-        ChessPieceType requestedType,
-        RpcParams rpcParams = default)
-    {
-        _moveStatus = accepted
-            ? $"Pawn promoted to {requestedType}."
-            : "Promotion request was rejected.";
-    }
-
-    private void ClearSelection()
-    {
-        _selectedFile = -1;
-        _selectedRank = -1;
-        _selectedPieceId = -1;
-        pieceSpawner?.HideSelection();
+        return collided;
     }
 
     public void UpdateLocalVoiceGazeTarget(
@@ -606,34 +551,83 @@ public sealed class NetworkChessGame : NetworkBehaviour
         _localCommanderFile = commanderFile;
         _localCommanderRank = commanderRank;
         _localVoiceTargetPieceId = pieceId.HasValue ? pieceId.Value : -1;
-        pieceSpawner?.SetEditorVoiceTarget(pieceId);
+        pieceSpawner?.SetVoiceSelectionTarget(pieceId);
+        RecordLocalVoiceGazeSample();
     }
 
     public bool TryGetLocalVoiceTargetSnapshot(
         out ushort pieceId,
         out float distanceInSquares)
     {
+        return TryGetLocalVoiceTargetSnapshotAt(
+            Time.unscaledTime,
+            out pieceId,
+            out distanceInSquares);
+    }
+
+    public bool TryGetLocalVoiceTargetSnapshotAt(
+        float sampleTime,
+        out ushort pieceId,
+        out float distanceInSquares)
+    {
         pieceId = 0;
         distanceInSquares = 0f;
 
-        if (_localVoiceTargetPieceId < 0)
+        if (_localVoiceGazeHistory.Count == 0)
         {
             return false;
         }
 
-        int pieceIndex = FindPieceIndexById((ushort)_localVoiceTargetPieceId);
+        LocalVoiceGazeSample sample = _localVoiceGazeHistory[0];
 
-        if (pieceIndex < 0)
+        for (int index = _localVoiceGazeHistory.Count - 1; index >= 0; index--)
+        {
+            if (_localVoiceGazeHistory[index].Time <= sampleTime)
+            {
+                sample = _localVoiceGazeHistory[index];
+                break;
+            }
+        }
+
+        if (sample.PieceId < 0 ||
+            FindPieceIndexById((ushort)sample.PieceId) < 0)
         {
             return false;
         }
 
-        NetworkChessPieceState piece = _pieces[pieceIndex];
-        pieceId = piece.Id;
-        distanceInSquares = Vector2.Distance(
-            new Vector2(_localCommanderFile, _localCommanderRank),
-            new Vector2(piece.BoardFile, piece.BoardRank));
+        pieceId = (ushort)sample.PieceId;
+        distanceInSquares = sample.DistanceInSquares;
         return true;
+    }
+
+    private void RecordLocalVoiceGazeSample()
+    {
+        float distance = 0f;
+
+        if (_localVoiceTargetPieceId >= 0)
+        {
+            int pieceIndex = FindPieceIndexById((ushort)_localVoiceTargetPieceId);
+
+            if (pieceIndex >= 0)
+            {
+                NetworkChessPieceState piece = _pieces[pieceIndex];
+                distance = Vector2.Distance(
+                    new Vector2(_localCommanderFile, _localCommanderRank),
+                    new Vector2(piece.BoardFile, piece.BoardRank));
+            }
+        }
+
+        float now = Time.unscaledTime;
+        _localVoiceGazeHistory.Add(new LocalVoiceGazeSample(
+            now,
+            _localVoiceTargetPieceId,
+            distance));
+
+        while (_localVoiceGazeHistory.Count > 0 &&
+               now - _localVoiceGazeHistory[0].Time > 2f)
+        {
+            _localVoiceGazeHistory.RemoveAt(0);
+        }
     }
 
     public void ShowLocalVoiceFailure(ushort? pieceId)
@@ -644,10 +638,23 @@ public sealed class NetworkChessGame : NetworkBehaviour
         }
     }
 
+    public void ShowLocalVoiceCommandTarget(
+        ushort? pieceId,
+        float duration = -1f)
+    {
+        pieceSpawner?.SetVoiceCommandTarget(pieceId, duration);
+    }
+
+    public void HoldLocalVoiceCommandTarget(float duration = 1f)
+    {
+        pieceSpawner?.HoldVoiceCommandTarget(duration);
+    }
+
     public bool TryExecuteLocalVoiceCommand(
         ushort pieceId,
         float targetDistanceInSquares,
         float commandReachInSquares,
+        float commandLoudness,
         PieceVoiceCommand command,
         out string rejection)
     {
@@ -665,31 +672,44 @@ public sealed class NetworkChessGame : NetworkBehaviour
             return false;
         }
 
+        if (localPlayer.Team != PlayerTeam.White &&
+            localPlayer.Team != PlayerTeam.Black)
+        {
+            rejection = "먼저 팀을 선택해 주세요.";
+            return false;
+        }
+
         int pieceIndex = FindPieceIndexById(pieceId);
 
         if (pieceIndex < 0 || _pieces[pieceIndex].OwnerTeam != localPlayer.Team)
         {
-            rejection = "선택한 말은 현재 플레이어의 말이 아닙니다.";
+            rejection = "자기 팀의 말만 명령할 수 있습니다.";
             return false;
         }
 
         if (command != PieceVoiceCommand.Stop &&
-            localPlayer.Team != _currentTurn.Value)
+            _winner.Value != PlayerTeam.Unassigned)
         {
-            rejection = "현재 팀의 차례가 아닙니다.";
+            rejection = "게임이 이미 끝났습니다.";
             return false;
         }
 
         if (commandReachInSquares + 0.05f < targetDistanceInSquares)
         {
             rejection =
-                $"목소리가 말까지 닿지 않았습니다. " +
-                $"거리 {targetDistanceInSquares:F1}칸 / 전달 {commandReachInSquares:F1}칸";
+                "목소리가 말까지 닿지 않습니다. 거리 " +
+                targetDistanceInSquares.ToString("F1") +
+                "칸 / 전달 " +
+                commandReachInSquares.ToString("F1") +
+                "칸";
             ShowLocalVoiceFailure(pieceId);
             return false;
         }
 
-        RequestVoiceCommandRpc(pieceId, command);
+        RequestVoiceCommandRpc(
+            pieceId,
+            command,
+            Mathf.Clamp01(commandLoudness));
         return true;
     }
 
@@ -699,6 +719,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
     private void RequestVoiceCommandRpc(
         ushort pieceId,
         PieceVoiceCommand command,
+        float commandLoudness,
         RpcParams rpcParams = default)
     {
         if (!NetworkPlayer.TryGetByClientId(
@@ -718,18 +739,23 @@ public sealed class NetworkChessGame : NetworkBehaviour
         NetworkChessPieceState piece = _pieces[pieceIndex];
 
         if (piece.OwnerTeam != player.Team ||
-            (command != PieceVoiceCommand.Stop && player.Team != _currentTurn.Value))
+            (command != PieceVoiceCommand.Stop &&
+             _winner.Value != PlayerTeam.Unassigned))
         {
             return;
         }
+
+        commandLoudness = Mathf.Clamp01(commandLoudness);
 
         switch (command)
         {
             case PieceVoiceCommand.MoveForward:
                 piece.VoiceMoveAxis = 1;
+                piece.VoiceMoveLoudness = commandLoudness;
                 break;
             case PieceVoiceCommand.MoveBackward:
                 piece.VoiceMoveAxis = -1;
+                piece.VoiceMoveLoudness = commandLoudness;
                 break;
             case PieceVoiceCommand.Stop:
                 piece.VoiceMoveAxis = 0;
@@ -737,17 +763,49 @@ public sealed class NetworkChessGame : NetworkBehaviour
                 break;
             case PieceVoiceCommand.TurnLeft:
                 piece.VoiceTurnAxis = -1;
+                piece.VoiceTurnLoudness = commandLoudness;
                 break;
             case PieceVoiceCommand.TurnRight:
                 piece.VoiceTurnAxis = 1;
+                piece.VoiceTurnLoudness = commandLoudness;
                 break;
             default:
                 return;
         }
 
         _pieces[pieceIndex] = piece;
-        _moveStatus =
-            $"Voice command: {KoreanVoiceCommand.GetDisplayName(command)}";
+    }
+
+    private bool TryGetLocalPlayer(out NetworkPlayer localPlayer)
+    {
+        localPlayer = null;
+
+        return NetworkManager != null &&
+               NetworkManager.IsListening &&
+               NetworkPlayer.TryGetByClientId(
+                   NetworkManager.LocalClientId,
+                   out localPlayer);
+    }
+
+    private int FindPieceIndexById(ushort pieceId)
+    {
+        for (int index = 0; index < _pieces.Count; index++)
+        {
+            if (_pieces[index].Id == pieceId)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private void ClearLocalVoiceTarget()
+    {
+        _localVoiceTargetPieceId = -1;
+        _localVoiceGazeHistory.Clear();
+        pieceSpawner?.SetVoiceSelectionTarget(null);
+        pieceSpawner?.SetVoiceCommandTarget(null);
     }
 
     private static Vector2 GetVoiceMoveDirection(
@@ -766,693 +824,12 @@ public sealed class NetworkChessGame : NetworkBehaviour
             -forward.x * sine + forward.y * cosine);
     }
 
-    [Rpc(
-        SendTo.Server,
-        InvokePermission = RpcInvokePermission.Everyone)]
-    private void RequestMoveRpc(
-        byte fromFile,
-        byte fromRank,
-        byte toFile,
-        byte toRank,
-        RpcParams rpcParams = default)
+    private float GetVoiceSpeedMultiplier(float commandLoudness)
     {
-        ulong senderClientId = rpcParams.Receive.SenderClientId;
-        ChessMoveResult result = ValidateAndApplyMove(
-            senderClientId,
-            fromFile,
-            fromRank,
-            toFile,
-            toRank);
-
-        MoveResultRpc(
-            result,
-            RpcTarget.Single(senderClientId, RpcTargetUse.Temp));
-    }
-
-    [Rpc(
-        SendTo.SpecifiedInParams,
-        InvokePermission = RpcInvokePermission.Server)]
-    private void MoveResultRpc(
-        ChessMoveResult result,
-        RpcParams rpcParams = default)
-    {
-        _moveStatus = GetMoveResultMessage(result);
-
-        if (result == ChessMoveResult.Accepted)
-        {
-            ClearSelection();
-        }
-    }
-
-    private ChessMoveResult ValidateAndApplyMove(
-        ulong senderClientId,
-        int fromFile,
-        int fromRank,
-        int toFile,
-        int toRank)
-    {
-        if (_winner.Value != PlayerTeam.Unassigned)
-        {
-            return ChessMoveResult.GameAlreadyFinished;
-        }
-
-        if (_promotionPending.Value)
-        {
-            return ChessMoveResult.PromotionRequired;
-        }
-
-        if (!IsValidSquare(fromFile, fromRank) ||
-            !IsValidSquare(toFile, toRank))
-        {
-            return ChessMoveResult.InvalidSquare;
-        }
-
-        if (!NetworkPlayer.TryGetByClientId(
-                senderClientId,
-                out NetworkPlayer player))
-        {
-            return ChessMoveResult.PlayerNotFound;
-        }
-
-        if (player.Team != PlayerTeam.White &&
-            player.Team != PlayerTeam.Black)
-        {
-            return ChessMoveResult.TeamNotSelected;
-        }
-
-        if (player.Team != _currentTurn.Value)
-        {
-            return ChessMoveResult.NotYourTurn;
-        }
-
-        bool firstMoveOfTurn = !_sequenceActive.Value;
-
-        if (_sequenceActive.Value &&
-            (fromFile != _activeFile.Value || fromRank != _activeRank.Value))
-        {
-            return ChessMoveResult.MustContinueActiveStack;
-        }
-
-        List<int> movingStack = GetStackIndicesAt(fromFile, fromRank);
-
-        if (movingStack.Count == 0)
-        {
-            return ChessMoveResult.NoPieceOnSource;
-        }
-
-        int movementDepth = _sequenceActive.Value
-            ? _activeMoveDepth.Value
-            : GetStackCursor(movingStack);
-        int movementPieceIndex = FindPieceIndexAtDepth(
-            movingStack,
-            movementDepth);
-
-        if (movementPieceIndex < 0)
-        {
-            return ChessMoveResult.IllegalMove;
-        }
-
-        NetworkChessPieceState movementPiece = _pieces[movementPieceIndex];
-
-        if (movementPiece.OwnerTeam != player.Team)
-        {
-            return ChessMoveResult.NotYourStack;
-        }
-
-        List<int> targetStack = GetStackIndicesAt(toFile, toRank);
-
-        if (targetStack.Count > 0 &&
-            _pieces[targetStack[0]].OwnerTeam == player.Team)
-        {
-            return ChessMoveResult.OwnStackOnDestination;
-        }
-
-
-        bool targetContainsKing = StackContainsPieceType(
-            targetStack,
-            ChessPieceType.King);
-
-        if (targetContainsKing && !firstMoveOfTurn)
-        {
-            return ChessMoveResult.KingCaptureMustBeFirstMove;
-        }
-
-        if (movementPiece.PieceType == ChessPieceType.King &&
-            targetStack.Count > 1)
-        {
-            return ChessMoveResult.KingCannotCaptureStack;
-        }
-
-        if (!IsLegalBasicMove(
-                movementPiece,
-                targetStack.Count > 0,
-                fromFile,
-                fromRank,
-                toFile,
-                toRank))
-        {
-            return ChessMoveResult.IllegalMove;
-        }
-
-        if (!HasAnyLegalMove(
-                movementPiece,
-                fromFile,
-                fromRank,
-                firstMoveOfTurn))
-        {
-            return ChessMoveResult.StackHasNoLegalMove;
-        }
-
-        bool captured = targetStack.Count > 0;
-        bool pawnReachedPromotionRank =
-            movementPiece.PieceType == ChessPieceType.Pawn &&
-            IsPromotionRank(player.Team, toRank);
-
-        MoveStack(
-            movingStack,
-            targetStack,
-            movementPieceIndex,
-            player.Team,
-            toFile,
-            toRank);
-
-        _lastMove.Value = new FixedString64Bytes(
-            $"{player.Team}: " +
-            $"{GetSquareName(fromFile, fromRank)}" +
-            (captured ? "x" : "-") +
-            GetSquareName(toFile, toRank));
-
-        bool turnShouldEnd = captured;
-
-        if (targetContainsKing)
-        {
-            _winner.Value = player.Team;
-            ClearServerSequence();
-            turnShouldEnd = false;
-        }
-        else if (captured)
-        {
-            List<int> mergedStack = GetStackIndicesAt(toFile, toRank);
-            SetStackCursor(mergedStack, 0);
-            ClearServerSequence();
-        }
-        else
-        {
-            int nextMoveDepth = movementDepth + 1;
-
-            if (nextMoveDepth >= movingStack.Count)
-            {
-                SetStackCursor(movingStack, 0);
-                ClearServerSequence();
-                turnShouldEnd = true;
-            }
-            else
-            {
-                SetStackCursor(movingStack, nextMoveDepth);
-                _sequenceActive.Value = true;
-                _activeFile.Value = (byte)toFile;
-                _activeRank.Value = (byte)toRank;
-                _activeMoveDepth.Value = (byte)nextMoveDepth;
-
-                int nextPieceIndex = FindPieceIndexAtDepth(
-                    movingStack,
-                    nextMoveDepth);
-                NetworkChessPieceState nextPiece = _pieces[nextPieceIndex];
-
-                if (!HasAnyLegalMove(
-                        nextPiece,
-                        toFile,
-                        toRank,
-                        firstMoveOfTurn: false))
-                {
-                    ClearServerSequence();
-                    turnShouldEnd = true;
-                }
-            }
-        }
-
-        if (pawnReachedPromotionRank && !targetContainsKing)
-        {
-            _promotionPieceId.Value = movementPiece.Id;
-            _promotionEndsTurn.Value = turnShouldEnd;
-            _promotionPending.Value = true;
-        }
-        else if (turnShouldEnd)
-        {
-            EndTurn(player.Team);
-        }
-
-        return ChessMoveResult.Accepted;
-    }
-
-    private void MoveStack(
-        List<int> movingStack,
-        List<int> targetStack,
-        int movementPieceIndex,
-        PlayerTeam newOwner,
-        int toFile,
-        int toRank)
-    {
-        int targetDepthOffset = targetStack.Count;
-
-        foreach (int index in targetStack)
-        {
-            NetworkChessPieceState piece = _pieces[index];
-            piece.OwnerTeam = newOwner;
-            piece.BoardFile = toFile;
-            piece.BoardRank = toRank;
-            piece.VoiceMoveAxis = 0;
-            piece.VoiceTurnAxis = 0;
-            _pieces[index] = piece;
-        }
-
-        foreach (int index in movingStack)
-        {
-            NetworkChessPieceState piece = _pieces[index];
-            piece.OwnerTeam = newOwner;
-            piece.File = (byte)toFile;
-            piece.Rank = (byte)toRank;
-            piece.BoardFile = toFile;
-            piece.BoardRank = toRank;
-            piece.VoiceMoveAxis = 0;
-            piece.VoiceTurnAxis = 0;
-            piece.StackDepth = (byte)(targetDepthOffset + piece.StackDepth);
-
-            if (index == movementPieceIndex)
-            {
-                piece.HasMoved = true;
-            }
-
-            _pieces[index] = piece;
-        }
-    }
-
-    private void SetStackCursor(List<int> stack, int nextMoveDepth)
-    {
-        byte cursor = (byte)Mathf.Clamp(nextMoveDepth, 0, byte.MaxValue);
-
-        foreach (int index in stack)
-        {
-            NetworkChessPieceState piece = _pieces[index];
-            piece.NextMoveDepth = cursor;
-            _pieces[index] = piece;
-        }
-    }
-
-    private int GetStackCursor(List<int> stack)
-    {
-        if (stack.Count == 0)
-        {
-            return 0;
-        }
-
-        int cursor = _pieces[stack[0]].NextMoveDepth;
-        return cursor < stack.Count ? cursor : 0;
-    }
-
-    private int FindPieceIndexAtDepth(List<int> stack, int depth)
-    {
-        foreach (int index in stack)
-        {
-            if (_pieces[index].StackDepth == depth)
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private bool HasAnyLegalMove(
-        NetworkChessPieceState movementPiece,
-        int fromFile,
-        int fromRank,
-        bool firstMoveOfTurn)
-    {
-        for (int toRank = 0; toRank < 8; toRank++)
-        {
-            for (int toFile = 0; toFile < 8; toFile++)
-            {
-                List<int> targetStack = GetStackIndicesAt(toFile, toRank);
-
-                if (targetStack.Count > 0 &&
-                    _pieces[targetStack[0]].OwnerTeam == movementPiece.OwnerTeam)
-                {
-                    continue;
-                }
-
-                bool targetContainsKing = StackContainsPieceType(
-                    targetStack,
-                    ChessPieceType.King);
-
-                if (targetContainsKing && !firstMoveOfTurn)
-                {
-                    continue;
-                }
-
-                if (movementPiece.PieceType == ChessPieceType.King &&
-                    targetStack.Count > 1)
-                {
-                    continue;
-                }
-
-                if (IsLegalBasicMove(
-                        movementPiece,
-                        targetStack.Count > 0,
-                        fromFile,
-                        fromRank,
-                        toFile,
-                        toRank))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private void ClearServerSequence()
-    {
-        _sequenceActive.Value = false;
-        _activeFile.Value = 0;
-        _activeRank.Value = 0;
-        _activeMoveDepth.Value = 0;
-    }
-
-    private void EndTurn(PlayerTeam teamThatMoved)
-    {
-        for (int index = 0; index < _pieces.Count; index++)
-        {
-            NetworkChessPieceState piece = _pieces[index];
-
-            if (piece.OwnerTeam == teamThatMoved &&
-                (piece.VoiceMoveAxis != 0 || piece.VoiceTurnAxis != 0))
-            {
-                piece.VoiceMoveAxis = 0;
-                piece.VoiceTurnAxis = 0;
-                _pieces[index] = piece;
-            }
-        }
-
-        ClearServerSequence();
-        _currentTurn.Value = GetOpponent(teamThatMoved);
-    }
-
-    private static bool IsPromotionRank(PlayerTeam team, int rank)
-    {
-        return team == PlayerTeam.White ? rank == 7 : rank == 0;
-    }
-
-    private bool IsLegalBasicMove(
-        NetworkChessPieceState movementPiece,
-        bool destinationOccupied,
-        int fromFile,
-        int fromRank,
-        int toFile,
-        int toRank)
-    {
-        int fileDelta = toFile - fromFile;
-        int rankDelta = toRank - fromRank;
-        int absoluteFileDelta = Mathf.Abs(fileDelta);
-        int absoluteRankDelta = Mathf.Abs(rankDelta);
-
-        return movementPiece.PieceType switch
-        {
-            ChessPieceType.Pawn => IsLegalPawnMove(
-                movementPiece,
-                destinationOccupied,
-                fromFile,
-                fromRank,
-                toFile,
-                toRank),
-
-            ChessPieceType.Knight =>
-                absoluteFileDelta == 1 && absoluteRankDelta == 2 ||
-                absoluteFileDelta == 2 && absoluteRankDelta == 1,
-
-            ChessPieceType.Bishop =>
-                absoluteFileDelta == absoluteRankDelta &&
-                absoluteFileDelta > 0 &&
-                IsPathClear(fromFile, fromRank, toFile, toRank),
-
-            ChessPieceType.Rook =>
-                (fileDelta == 0) != (rankDelta == 0) &&
-                IsPathClear(fromFile, fromRank, toFile, toRank),
-
-            ChessPieceType.Queen =>
-                (((fileDelta == 0) != (rankDelta == 0)) ||
-                 absoluteFileDelta == absoluteRankDelta &&
-                 absoluteFileDelta > 0) &&
-                IsPathClear(fromFile, fromRank, toFile, toRank),
-
-            ChessPieceType.King =>
-                Mathf.Max(absoluteFileDelta, absoluteRankDelta) == 1,
-
-            _ => false
-        };
-    }
-
-    private bool IsLegalPawnMove(
-        NetworkChessPieceState movementPiece,
-        bool destinationOccupied,
-        int fromFile,
-        int fromRank,
-        int toFile,
-        int toRank)
-    {
-        int direction = movementPiece.OwnerTeam == PlayerTeam.White ? 1 : -1;
-        int startingRank = movementPiece.OwnerTeam == PlayerTeam.White ? 1 : 6;
-        int fileDelta = toFile - fromFile;
-        int rankDelta = toRank - fromRank;
-
-        if (fileDelta == 0)
-        {
-            if (destinationOccupied)
-            {
-                return false;
-            }
-
-            if (rankDelta == direction)
-            {
-                return true;
-            }
-
-            if (fromRank == startingRank &&
-                !movementPiece.HasMoved &&
-                rankDelta == direction * 2)
-            {
-                int middleRank = fromRank + direction;
-                return !IsSquareOccupied(fromFile, middleRank);
-            }
-
-            return false;
-        }
-
-        return Mathf.Abs(fileDelta) == 1 &&
-               rankDelta == direction &&
-               destinationOccupied;
-    }
-
-    private bool IsPathClear(
-        int fromFile,
-        int fromRank,
-        int toFile,
-        int toRank)
-    {
-        int fileStep = Math.Sign(toFile - fromFile);
-        int rankStep = Math.Sign(toRank - fromRank);
-        int currentFile = fromFile + fileStep;
-        int currentRank = fromRank + rankStep;
-
-        while (currentFile != toFile || currentRank != toRank)
-        {
-            if (IsSquareOccupied(currentFile, currentRank))
-            {
-                return false;
-            }
-
-            currentFile += fileStep;
-            currentRank += rankStep;
-        }
-
-        return true;
-    }
-
-    private bool IsSquareOccupied(int file, int rank)
-    {
-        for (int index = 0; index < _pieces.Count; index++)
-        {
-            NetworkChessPieceState piece = _pieces[index];
-
-            if (piece.File == file && piece.Rank == rank)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private List<int> GetStackIndicesAt(int file, int rank)
-    {
-        List<int> indices = new();
-
-        for (int index = 0; index < _pieces.Count; index++)
-        {
-            NetworkChessPieceState piece = _pieces[index];
-
-            if (piece.File == file && piece.Rank == rank)
-            {
-                indices.Add(index);
-            }
-        }
-
-        indices.Sort(
-            (left, right) =>
-                _pieces[left].StackDepth.CompareTo(_pieces[right].StackDepth));
-        return indices;
-    }
-
-    private int FindTopPieceIndexAt(int file, int rank)
-    {
-        List<int> stack = GetStackIndicesAt(file, rank);
-        return stack.Count == 0 ? -1 : stack[^1];
-    }
-
-    private int FindBottomPieceIndexAt(int file, int rank)
-    {
-        List<int> stack = GetStackIndicesAt(file, rank);
-        return stack.Count == 0 ? -1 : stack[0];
-    }
-
-    private int FindPieceIndexById(ushort pieceId)
-    {
-        for (int index = 0; index < _pieces.Count; index++)
-        {
-            if (_pieces[index].Id == pieceId)
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private int FindIndexWithLowestDepth(List<int> stack)
-    {
-        int result = stack[0];
-
-        foreach (int index in stack)
-        {
-            if (_pieces[index].StackDepth < _pieces[result].StackDepth)
-            {
-                result = index;
-            }
-        }
-
-        return result;
-    }
-
-    private bool StackContainsPieceType(
-        List<int> stack,
-        ChessPieceType pieceType)
-    {
-        foreach (int index in stack)
-        {
-            if (_pieces[index].PieceType == pieceType)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private int CountStacks()
-    {
-        bool[] occupiedSquares = new bool[64];
-        int count = 0;
-
-        foreach (NetworkChessPieceState piece in _pieces)
-        {
-            int squareIndex = GetSquareIndex(piece.File, piece.Rank);
-
-            if (!occupiedSquares[squareIndex])
-            {
-                occupiedSquares[squareIndex] = true;
-                count++;
-            }
-        }
-
-        return count;
-    }
-
-    private int GetLargestStackSize()
-    {
-        int[] stackSizes = new int[64];
-        int largest = 0;
-
-        foreach (NetworkChessPieceState piece in _pieces)
-        {
-            int squareIndex = GetSquareIndex(piece.File, piece.Rank);
-            stackSizes[squareIndex]++;
-            largest = Mathf.Max(largest, stackSizes[squareIndex]);
-        }
-
-        return largest;
-    }
-
-    private int CountOwnedPieces(PlayerTeam team)
-    {
-        int count = 0;
-
-        foreach (NetworkChessPieceState piece in _pieces)
-        {
-            if (piece.OwnerTeam == team)
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
-
-    private bool HasSelectedSquare =>
-        IsValidSquare(_selectedFile, _selectedRank);
-
-    private static int GetSquareIndex(int file, int rank)
-    {
-        return rank * 8 + file;
-    }
-
-    private static bool TryParseSquare(
-        string text,
-        out int file,
-        out int rank)
-    {
-        string normalized = text.Trim().ToLowerInvariant();
-
-        if (normalized.Length == 2)
-        {
-            file = normalized[0] - 'a';
-            rank = normalized[1] - '1';
-            return IsValidSquare(file, rank);
-        }
-
-        file = -1;
-        rank = -1;
-        return false;
-    }
-
-    private static bool IsValidSquare(int file, int rank)
-    {
-        return (uint)file < 8 && (uint)rank < 8;
-    }
-
-    private static string GetSquareName(int file, int rank)
-    {
-        return $"{(char)('a' + file)}{rank + 1}";
+        return Mathf.Lerp(
+            quietVoiceSpeedMultiplier,
+            loudVoiceSpeedMultiplier,
+            Mathf.Clamp01(commandLoudness));
     }
 
     private static PlayerTeam GetOpponent(PlayerTeam team)
@@ -1462,34 +839,31 @@ public sealed class NetworkChessGame : NetworkBehaviour
             : PlayerTeam.White;
     }
 
-    private static bool IsValidPromotionType(ChessPieceType pieceType)
+    private void OnValidate()
     {
-        return pieceType == ChessPieceType.Queen ||
-               pieceType == ChessPieceType.Rook ||
-               pieceType == ChessPieceType.Bishop ||
-               pieceType == ChessPieceType.Knight;
-    }
-
-    private static string GetMoveResultMessage(ChessMoveResult result)
-    {
-        return result switch
-        {
-            ChessMoveResult.Accepted => "Move accepted.",
-            ChessMoveResult.InvalidSquare => "Use squares from a1 to h8.",
-            ChessMoveResult.PlayerNotFound => "Network player was not found.",
-            ChessMoveResult.TeamNotSelected => "Choose White or Black first.",
-            ChessMoveResult.NotYourTurn => "It is not your team's turn.",
-            ChessMoveResult.NoPieceOnSource => "There is no stack on that square.",
-            ChessMoveResult.NotYourStack => "That stack belongs to the other team.",
-            ChessMoveResult.OwnStackOnDestination => "Your stack occupies the destination.",
-            ChessMoveResult.IllegalMove => "That piece cannot legally move there.",
-            ChessMoveResult.MustContinueActiveStack => "Continue with your team's active stack.",
-            ChessMoveResult.StackHasNoLegalMove => "The next piece in this stack has no legal move.",
-            ChessMoveResult.KingCaptureMustBeFirstMove => "A king can only be captured on the first move of the turn.",
-            ChessMoveResult.KingCannotCaptureStack => "A king cannot capture a stack of multiple pieces.",
-            ChessMoveResult.PromotionRequired => "Choose a promotion piece before moving again.",
-            ChessMoveResult.GameAlreadyFinished => "The game has already finished.",
-            _ => "Move rejected."
-        };
+        voiceMoveSpeed = Mathf.Max(0.05f, voiceMoveSpeed);
+        voiceTurnSpeed = Mathf.Max(5f, voiceTurnSpeed);
+        quietVoiceSpeedMultiplier = Mathf.Clamp(
+            quietVoiceSpeedMultiplier,
+            0.05f,
+            1f);
+        loudVoiceSpeedMultiplier = Mathf.Clamp(
+            loudVoiceSpeedMultiplier,
+            1f,
+            3f);
+        pieceCollisionRadius = Mathf.Clamp(pieceCollisionRadius, 0.2f, 0.49f);
+        collisionRestitution = Mathf.Clamp01(collisionRestitution);
+        collisionImpulseMultiplier = Mathf.Clamp(
+            collisionImpulseMultiplier,
+            0.5f,
+            2f);
+        knockbackDrag = Mathf.Max(0f, knockbackDrag);
+        ringOutDistance = Mathf.Max(0.1f, ringOutDistance);
+        playerPieceCollisionHeight = Mathf.Max(
+            0.1f,
+            playerPieceCollisionHeight);
+        minimumPlayerImpactSpeed = Mathf.Max(0f, minimumPlayerImpactSpeed);
+        minimumPlayerImpactAlignment = Mathf.Clamp01(
+            minimumPlayerImpactAlignment);
     }
 }

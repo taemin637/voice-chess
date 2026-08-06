@@ -107,10 +107,56 @@ public static class KoreanVoiceCommandParser
         new("옆으로 돌아", PieceVoiceCommand.TurnRight)
     };
 
+    private static readonly string[] SequenceConnectors =
+    {
+        "그리고 나서", "그 다음에", "그다음에", "그리고", "그 다음", "그다음", "다음에", "다음"
+    };
+
+    private static readonly string[] SequenceBoundaryEndings =
+    {
+        "하고", "고"
+    };
+
+    private static readonly PhraseDefinition[] SequenceDefinitions = Definitions
+        .OrderByDescending(definition => definition.Comparable.Length)
+        .ToArray();
+
     public static IReadOnlyList<string> PhraseHints { get; } = Definitions
         .Select(definition => definition.Phrase)
         .Distinct()
         .ToArray();
+
+    public static IReadOnlyList<KoreanVoiceParseResult> ParseSequence(
+        string recognizedText)
+    {
+        string normalized = Normalize(recognizedText);
+        string comparable = MakeSequenceComparable(recognizedText);
+        List<PhraseDefinition> matches = new();
+
+        if (comparable.Length > 0 &&
+            TrySegmentExactSequence(
+                comparable,
+                0,
+                matches,
+                new HashSet<int>()))
+        {
+            return matches
+                .Select(match => Accepted(
+                    match.Command,
+                    normalized,
+                    match.Phrase,
+                    1f,
+                    matches.Count > 1
+                        ? "연속 명령에서 정확히 분리"
+                        : "등록 문장과 정확히 일치"))
+                .ToArray();
+        }
+
+        KoreanVoiceParseResult single = Parse(recognizedText);
+        return single.Accepted
+            ? new[] { single }
+            : Array.Empty<KoreanVoiceParseResult>();
+    }
 
     public static KoreanVoiceParseResult Parse(string recognizedText)
     {
@@ -210,6 +256,93 @@ public static class KoreanVoiceCommandParser
         }
 
         return builder.ToString();
+    }
+
+    private static string MakeSequenceComparable(string text)
+    {
+        string result = MakeComparable(text);
+
+        foreach (string connector in SequenceConnectors)
+        {
+            result = result.Replace(
+                Normalize(connector),
+                string.Empty);
+        }
+
+        return result;
+    }
+
+    private static bool TrySegmentExactSequence(
+        string text,
+        int index,
+        List<PhraseDefinition> matches,
+        HashSet<int> failedIndices)
+    {
+        if (index >= text.Length)
+        {
+            return matches.Count > 0;
+        }
+
+        if (failedIndices.Contains(index))
+        {
+            return false;
+        }
+
+        foreach (PhraseDefinition definition in SequenceDefinitions)
+        {
+            if (index + definition.Comparable.Length > text.Length ||
+                string.CompareOrdinal(
+                    text,
+                    index,
+                    definition.Comparable,
+                    0,
+                    definition.Comparable.Length) != 0)
+            {
+                continue;
+            }
+
+            matches.Add(definition);
+            int nextIndex = index + definition.Comparable.Length;
+
+            if (TrySegmentExactSequence(
+                    text,
+                    nextIndex,
+                    matches,
+                    failedIndices))
+            {
+                return true;
+            }
+
+            foreach (string ending in SequenceBoundaryEndings)
+            {
+                string comparableEnding = Normalize(ending);
+
+                if (nextIndex + comparableEnding.Length > text.Length ||
+                    string.CompareOrdinal(
+                        text,
+                        nextIndex,
+                        comparableEnding,
+                        0,
+                        comparableEnding.Length) != 0)
+                {
+                    continue;
+                }
+
+                if (TrySegmentExactSequence(
+                        text,
+                        nextIndex + comparableEnding.Length,
+                        matches,
+                        failedIndices))
+                {
+                    return true;
+                }
+            }
+
+            matches.RemoveAt(matches.Count - 1);
+        }
+
+        failedIndices.Add(index);
+        return false;
     }
 
     private static string MakeComparable(string text)

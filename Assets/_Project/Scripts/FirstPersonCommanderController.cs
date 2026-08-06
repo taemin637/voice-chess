@@ -5,11 +5,18 @@ using UnityEngine.SceneManagement;
 [DisallowMultipleComponent]
 public sealed class FirstPersonCommanderController : MonoBehaviour
 {
-    [SerializeField, Min(0.1f)] private float moveSpeedInSquares = 3.2f;
+    [SerializeField, Min(0.1f)] private float moveSpeedInSquares = 5.0f;
     [SerializeField, Min(0.01f)] private float mouseSensitivity = 0.08f;
     [SerializeField, Range(-89f, 0f)] private float minimumPitch = -75f;
     [SerializeField, Range(0f, 89f)] private float maximumPitch = 75f;
-    [SerializeField, Min(0.1f)] private float eyeHeightInSquares = 1.7f;
+    [SerializeField, Range(0.05f, 1f)] private float eyeHeightAsPieceFraction = 0.25f;
+
+    [Header("Player Capsule Physics")]
+    [SerializeField, Range(0.08f, 0.35f)]
+    private float collisionRadiusInSquares = 0.16f;
+    [SerializeField, Min(0.1f)] private float jumpSpeedInSquares = 4.2f;
+    [SerializeField, Min(0.1f)] private float gravityInSquares = 15.0f;
+    [SerializeField, Min(0f)] private float playerKnockbackDrag = 2.2f;
 
     private Camera _viewCamera;
     private ChessPieceSpawner _pieceSpawner;
@@ -18,8 +25,14 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
     private float _rank = 3.5f;
     private float _yaw;
     private float _pitch;
+    private float _eyeHeightWorld;
+    private float _heightInSquares;
+    private float _verticalVelocity;
+    private Vector2 _knockbackVelocity;
+    private NetworkPlayer _localNetworkPlayer;
     private bool _cameraConfigured;
     private bool _cursorReleased;
+    private bool _isGrounded = true;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
@@ -58,9 +71,9 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         if (gameplayInputActive)
         {
             UpdateLook();
-            UpdateMovement();
         }
 
+        UpdateMovement(gameplayInputActive);
         UpdateCameraTransform();
         UpdateGazeTarget(gameplayInputActive);
     }
@@ -144,20 +157,18 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
             maximumPitch);
     }
 
-    private void UpdateMovement()
+    private void UpdateMovement(bool gameplayInputActive)
     {
         Keyboard keyboard = Keyboard.current;
-
-        if (keyboard == null)
-        {
-            return;
-        }
-
         Vector2 input = Vector2.zero;
-        input.x = (keyboard.dKey.isPressed ? 1f : 0f) -
-                  (keyboard.aKey.isPressed ? 1f : 0f);
-        input.y = (keyboard.wKey.isPressed ? 1f : 0f) -
-                  (keyboard.sKey.isPressed ? 1f : 0f);
+
+        if (gameplayInputActive && keyboard != null)
+        {
+            input.x = (keyboard.dKey.isPressed ? 1f : 0f) -
+                      (keyboard.aKey.isPressed ? 1f : 0f);
+            input.y = (keyboard.wKey.isPressed ? 1f : 0f) -
+                      (keyboard.sKey.isPressed ? 1f : 0f);
+        }
 
         if (input.sqrMagnitude > 1f)
         {
@@ -172,12 +183,92 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
             horizontalForward).normalized;
         Vector3 desiredDirection =
             horizontalRight * input.x + horizontalForward * input.y;
-        float distance = moveSpeedInSquares * Time.deltaTime;
-        float fileDelta = Vector3.Dot(desiredDirection, _pieceSpawner.BoardRight) * distance;
-        float rankDelta = Vector3.Dot(desiredDirection, _pieceSpawner.BoardForward) * distance;
-        _file = Mathf.Clamp(_file + fileDelta, 0f, 7f);
-        _rank = Mathf.Clamp(_rank + rankDelta, 0f, 7f);
-        transform.position = _pieceSpawner.GetBoardWorldPosition(_file, _rank);
+        Vector2 desiredVelocity = new(
+            Vector3.Dot(desiredDirection, _pieceSpawner.BoardRight),
+            Vector3.Dot(desiredDirection, _pieceSpawner.BoardForward));
+        desiredVelocity *= moveSpeedInSquares;
+
+        float deltaTime = Time.deltaTime;
+        _knockbackVelocity *= Mathf.Exp(-playerKnockbackDrag * deltaTime);
+        Vector2 playerVelocity = desiredVelocity + _knockbackVelocity;
+        Vector2 playerPosition = new(_file, _rank);
+        playerPosition += playerVelocity * deltaTime;
+
+        UpdateJump(gameplayInputActive, keyboard, deltaTime);
+
+        NetworkPlayer localPlayer = ResolveLocalNetworkPlayer();
+        PlayerTeam team = localPlayer != null
+            ? localPlayer.Team
+            : PlayerTeam.Unassigned;
+        _game.ResolvePlayerPieceCollisions(
+            team,
+            _heightInSquares,
+            collisionRadiusInSquares,
+            ref playerPosition,
+            ref playerVelocity);
+        _knockbackVelocity = playerVelocity - desiredVelocity;
+
+        _file = Mathf.Clamp(
+            playerPosition.x,
+            _pieceSpawner.GroundMinimumCoordinate,
+            _pieceSpawner.GroundMaximumCoordinate);
+        _rank = Mathf.Clamp(
+            playerPosition.y,
+            _pieceSpawner.GroundMinimumCoordinate,
+            _pieceSpawner.GroundMaximumCoordinate);
+        float squareSize = Mathf.Min(
+            _pieceSpawner.FileSpacing,
+            _pieceSpawner.RankSpacing);
+        transform.position = _pieceSpawner.GetBoardWorldPosition(_file, _rank) +
+            _pieceSpawner.BoardUp * (_heightInSquares * squareSize);
+
+        localPlayer?.SetLocalAvatarPose(
+            _file,
+            _rank,
+            _heightInSquares,
+            _yaw);
+    }
+
+    private void UpdateJump(
+        bool gameplayInputActive,
+        Keyboard keyboard,
+        float deltaTime)
+    {
+        if (gameplayInputActive &&
+            keyboard != null &&
+            keyboard.spaceKey.wasPressedThisFrame &&
+            _isGrounded)
+        {
+            _verticalVelocity = jumpSpeedInSquares;
+            _isGrounded = false;
+        }
+
+        if (_isGrounded)
+        {
+            _heightInSquares = 0f;
+            _verticalVelocity = 0f;
+            return;
+        }
+
+        _verticalVelocity -= gravityInSquares * deltaTime;
+        _heightInSquares += _verticalVelocity * deltaTime;
+
+        if (_heightInSquares <= 0f)
+        {
+            _heightInSquares = 0f;
+            _verticalVelocity = 0f;
+            _isGrounded = true;
+        }
+    }
+
+    private NetworkPlayer ResolveLocalNetworkPlayer()
+    {
+        if (_localNetworkPlayer == null || !_localNetworkPlayer.IsSpawned)
+        {
+            _localNetworkPlayer = NetworkPlayer.LocalPlayer;
+        }
+
+        return _localNetworkPlayer;
     }
 
     private void UpdateCameraTransform()
@@ -190,9 +281,17 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         Vector3 lookDirection = Quaternion.AngleAxis(
             _pitch,
             horizontalRight) * horizontalForward;
-        float eyeHeight = Mathf.Min(
-            _pieceSpawner.FileSpacing,
-            _pieceSpawner.RankSpacing) * eyeHeightInSquares;
+        if (_eyeHeightWorld <= 0f &&
+            _pieceSpawner.TryGetRepresentativePieceHeight(out float pieceHeight))
+        {
+            _eyeHeightWorld = pieceHeight * eyeHeightAsPieceFraction;
+        }
+
+        float eyeHeight = _eyeHeightWorld > 0f
+            ? _eyeHeightWorld
+            : Mathf.Min(
+                _pieceSpawner.FileSpacing,
+                _pieceSpawner.RankSpacing) * eyeHeightAsPieceFraction;
 
         _viewCamera.transform.SetPositionAndRotation(
             transform.position + up * eyeHeight,
@@ -241,5 +340,17 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         }
 
         SetCursorLocked(false);
+    }
+
+    private void OnValidate()
+    {
+        moveSpeedInSquares = Mathf.Max(0.1f, moveSpeedInSquares);
+        collisionRadiusInSquares = Mathf.Clamp(
+            collisionRadiusInSquares,
+            0.08f,
+            0.35f);
+        jumpSpeedInSquares = Mathf.Max(0.1f, jumpSpeedInSquares);
+        gravityInSquares = Mathf.Max(0.1f, gravityInSquares);
+        playerKnockbackDrag = Mathf.Max(0f, playerKnockbackDrag);
     }
 }
