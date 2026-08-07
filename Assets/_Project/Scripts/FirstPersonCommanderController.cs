@@ -9,7 +9,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
     [SerializeField, Min(0.01f)] private float mouseSensitivity = 0.08f;
     [SerializeField, Range(-89f, 0f)] private float minimumPitch = -75f;
     [SerializeField, Range(0f, 89f)] private float maximumPitch = 75f;
-    [SerializeField, Range(0.05f, 1f)] private float eyeHeightAsPieceFraction = 0.25f;
+    [SerializeField, Range(0.05f, 1f)] private float eyeHeightAsPieceFraction = 0.5f;
 
     [Header("Player Capsule Physics")]
     [SerializeField, Range(0.08f, 0.35f)]
@@ -31,7 +31,6 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
     private Vector2 _knockbackVelocity;
     private NetworkPlayer _localNetworkPlayer;
     private bool _cameraConfigured;
-    private bool _cursorReleased;
     private bool _isGrounded = true;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -64,7 +63,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         bool gameplayInputActive =
             NetworkPlayer.MatchStarted &&
             !SessionManager.IsFrontEndVisible &&
-            !InGameVoiceSettingsUI.IsOpen;
+            !InGameVoiceSettingsUI.IsBlockingGameplay;
 
         UpdateCursor(gameplayInputActive);
 
@@ -115,25 +114,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
 
     private void UpdateCursor(bool gameplayInputActive)
     {
-        Keyboard keyboard = Keyboard.current;
-        Mouse mouse = Mouse.current;
-
-        if (!gameplayInputActive)
-        {
-            SetCursorLocked(false);
-            return;
-        }
-
-        if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame)
-        {
-            _cursorReleased = true;
-        }
-        else if (_cursorReleased && mouse != null && mouse.leftButton.wasPressedThisFrame)
-        {
-            _cursorReleased = false;
-        }
-
-        SetCursorLocked(!_cursorReleased);
+        SetCursorLocked(gameplayInputActive);
     }
 
     private static void SetCursorLocked(bool locked)
@@ -144,7 +125,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
 
     private void UpdateLook()
     {
-        if (_cursorReleased || Mouse.current == null)
+        if (Mouse.current == null)
         {
             return;
         }
@@ -318,7 +299,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
     private void OnGUI()
     {
         if (!NetworkPlayer.MatchStarted || SessionManager.IsFrontEndVisible ||
-            InGameVoiceSettingsUI.IsOpen)
+            InGameVoiceSettingsUI.IsBlockingGameplay)
         {
             return;
         }

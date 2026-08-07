@@ -39,15 +39,18 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private const int MicrophoneSampleRate = 16000;
     private const int PreRollSampleCount = 3200;
     private const float VoiceStartHoldSeconds = 0.08f;
-    private const float VoiceEndSilenceSeconds = 0.08f;
+    private const float VoiceEndSilenceSeconds = 0.12f;
     private const float TargetSwitchBoundarySilenceSeconds = 0.04f;
     private const float MinimumTargetSwitchUtteranceSeconds = 0.3f;
     private const float MaximumAutomaticUtteranceSeconds = 3f;
     private const float NoiseCalibrationSeconds = 1.5f;
+    private const float SpeechBoundaryAverageSeconds = 0.2f;
 
     private readonly ConcurrentQueue<RecognitionOutcome> _outcomes = new();
     private readonly ConcurrentQueue<CapturedUtterance> _utteranceQueue = new();
     private readonly List<float> _speechLoudnessSamples = new();
+    private readonly List<LoudnessFrame> _voicedLoudnessFrames = new();
+    private readonly List<LoudnessFrame> _preRollLoudnessFrames = new();
     private readonly List<float> _noiseCalibrationSamples = new();
     private readonly List<byte> _capturedSpeechPcm = new();
     private readonly float[] _preRollSamples = new float[PreRollSampleCount];
@@ -61,6 +64,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private int _lastMicrophonePosition = -1;
     private int _preRollWriteIndex;
     private int _preRollCount;
+    private float _preRollLoudnessDuration;
     private NetworkChessGame _game;
     private bool _microphoneRunning;
     private bool _recognitionInProgress;
@@ -99,6 +103,18 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private bool _automaticStopRequested;
     private bool _currentRecognitionIsAutomatic;
     private bool _currentRecognitionExecutesCommand;
+
+    private readonly struct LoudnessFrame
+    {
+        public readonly float Decibels;
+        public readonly float Duration;
+
+        public LoudnessFrame(float decibels, float duration)
+        {
+            Decibels = decibels;
+            Duration = duration;
+        }
+    }
 
     public IReadOnlyList<string> MicrophoneDevices => _microphoneDevices;
     public int SelectedMicrophoneIndex => _selectedMicrophoneIndex;
@@ -148,6 +164,9 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         public readonly float VoiceTargetDistance;
         public readonly float CommandLoudnessDecibels;
         public readonly float CommandReachInSquares;
+        public readonly float SpeechStartAverageDecibels;
+        public readonly float SpeechEndAverageDecibels;
+        public readonly float SpeechAverageDecibels;
 
         public CapturedUtterance(
             bool executeCommand,
@@ -156,7 +175,10 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             ushort voiceTargetPieceId,
             float voiceTargetDistance,
             float commandLoudnessDecibels,
-            float commandReachInSquares)
+            float commandReachInSquares,
+            float speechStartAverageDecibels,
+            float speechEndAverageDecibels,
+            float speechAverageDecibels)
         {
             ExecuteCommand = executeCommand;
             PcmData = pcmData;
@@ -165,6 +187,9 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             VoiceTargetDistance = voiceTargetDistance;
             CommandLoudnessDecibels = commandLoudnessDecibels;
             CommandReachInSquares = commandReachInSquares;
+            SpeechStartAverageDecibels = speechStartAverageDecibels;
+            SpeechEndAverageDecibels = speechEndAverageDecibels;
+            SpeechAverageDecibels = speechAverageDecibels;
         }
     }
 
@@ -246,6 +271,9 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         public readonly float VoiceTargetDistance;
         public readonly float CommandLoudnessDecibels;
         public readonly float CommandReachInSquares;
+        public readonly float SpeechStartAverageDecibels;
+        public readonly float SpeechEndAverageDecibels;
+        public readonly float SpeechAverageDecibels;
 
         private RecognitionOutcome(
             CapturedUtterance utterance,
@@ -266,6 +294,9 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             VoiceTargetDistance = utterance.VoiceTargetDistance;
             CommandLoudnessDecibels = utterance.CommandLoudnessDecibels;
             CommandReachInSquares = utterance.CommandReachInSquares;
+            SpeechStartAverageDecibels = utterance.SpeechStartAverageDecibels;
+            SpeechEndAverageDecibels = utterance.SpeechEndAverageDecibels;
+            SpeechAverageDecibels = utterance.SpeechAverageDecibels;
         }
 
         public static RecognitionOutcome Success(
@@ -355,7 +386,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         if (_inputMode == VoiceInputMode.PushToTalk &&
             keyboard != null &&
             NetworkPlayer.MatchStarted &&
-            !InGameVoiceSettingsUI.IsOpen)
+            !InGameVoiceSettingsUI.IsBlockingGameplay)
         {
             if (keyboard.vKey.wasPressedThisFrame)
             {
@@ -371,6 +402,11 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
     public void RequestRecognitionTest()
     {
+        if (!_isCapturingSpeech)
+        {
+            _lastTranscript = string.Empty;
+        }
+
         ToggleRecognition(executeCommand: false);
     }
 
@@ -442,6 +478,10 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
         CapturePendingCommandContext();
         FinalizeCommandLoudness();
+        CalculateSpeechLoudnessAverages(
+            out float speechStartAverageDecibels,
+            out float speechEndAverageDecibels,
+            out float speechAverageDecibels);
         _isCapturingSpeech = false;
         _status = "입력 종료 · 결과 분석 중...";
 
@@ -452,7 +492,10 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             _pendingVoiceTargetPieceId,
             _pendingVoiceTargetDistance,
             _lastCommandLoudnessDecibels,
-            _lastCommandReachInSquares);
+            _lastCommandReachInSquares,
+            speechStartAverageDecibels,
+            speechEndAverageDecibels,
+            speechAverageDecibels);
         LiveRecognitionSession liveSession = _activeLiveSession;
         bool useLiveResult = liveSession != null && !_activeLiveSessionFailed;
         _activeLiveSession = null;
@@ -557,6 +600,19 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         _currentRecognitionIsAutomatic = includePreRoll;
         _currentRecognitionExecutesCommand = executeCommand;
         _speechLoudnessSamples.Clear();
+        _voicedLoudnessFrames.Clear();
+
+        if (includePreRoll)
+        {
+            foreach (LoudnessFrame frame in _preRollLoudnessFrames)
+            {
+                if (IsVoicedCommandFrame(frame.Decibels))
+                {
+                    _voicedLoudnessFrames.Add(frame);
+                }
+            }
+        }
+
         _capturedSpeechPcm.Clear();
         _hasPendingVoiceTarget = false;
         _pendingCommandContextCaptured = false;
@@ -885,6 +941,16 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             " + ",
             outcome.Commands.Select(KoreanVoiceCommand.GetDisplayName));
 
+        Debug.Log(
+            $"[음성 명령 dB] “{outcome.Text}” → {commandName} | " +
+            $"시작 {SpeechBoundaryAverageSeconds:F2}초 평균 " +
+            $"{outcome.SpeechStartAverageDecibels:F1} dBFS | " +
+            $"끝 {SpeechBoundaryAverageSeconds:F2}초 평균 " +
+            $"{outcome.SpeechEndAverageDecibels:F1} dBFS | " +
+            $"전체 발화 평균 {outcome.SpeechAverageDecibels:F1} dBFS | " +
+            $"기존 이동 기준(P80) {outcome.CommandLoudnessDecibels:F1} dBFS",
+            this);
+
         if (!outcome.ExecuteCommand)
         {
             _status =
@@ -1007,6 +1073,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         _peakMicrophoneDecibels = -80f;
         _preRollWriteIndex = 0;
         _preRollCount = 0;
+        _preRollLoudnessFrames.Clear();
+        _preRollLoudnessDuration = 0f;
         _microphoneRunning = true;
         _microphoneStatus = $"{_activeMicrophoneDevice} 입력을 감시 중입니다.";
 
@@ -1102,6 +1170,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         if (!_isCapturingSpeech)
         {
             QueuePreRoll(_microphoneSamples, frameCount, channels);
+            QueuePreRollLoudnessFrame(_microphoneDecibels, chunkDuration);
         }
 
         UpdateNoiseFloor(_microphoneDecibels, chunkDuration);
@@ -1125,6 +1194,13 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             }
 
             _speechLoudnessSamples.Add(_microphoneDecibels);
+        }
+
+        if (_isCapturingSpeech && IsVoicedCommandFrame(_microphoneDecibels))
+        {
+            _voicedLoudnessFrames.Add(new LoudnessFrame(
+                _microphoneDecibels,
+                chunkDuration));
         }
 
         _peakMicrophoneDecibels = Mathf.Max(_peakMicrophoneDecibels, _microphoneDecibels);
@@ -1177,7 +1253,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             _inputMode == VoiceInputMode.Automatic &&
             NetworkPlayer.MatchStarted &&
             !SessionManager.IsFrontEndVisible &&
-            !InGameVoiceSettingsUI.IsOpen &&
+            !InGameVoiceSettingsUI.IsBlockingGameplay &&
             HasSpeechCredentials;
 
         if (!automaticGameplayActive || IsNoiseCalibrating)
@@ -1475,6 +1551,86 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             loudness * loudness);
     }
 
+    private void CalculateSpeechLoudnessAverages(
+        out float startAverageDecibels,
+        out float endAverageDecibels,
+        out float speechAverageDecibels)
+    {
+        if (_voicedLoudnessFrames.Count == 0)
+        {
+            startAverageDecibels = -80f;
+            endAverageDecibels = -80f;
+            speechAverageDecibels = -80f;
+            return;
+        }
+
+        startAverageDecibels = CalculateAverageDecibels(
+            fromEnd: false,
+            maximumDuration: SpeechBoundaryAverageSeconds);
+        endAverageDecibels = CalculateAverageDecibels(
+            fromEnd: true,
+            maximumDuration: SpeechBoundaryAverageSeconds);
+        speechAverageDecibels = CalculateAverageDecibels(
+            fromEnd: false,
+            maximumDuration: float.PositiveInfinity);
+    }
+
+    private float CalculateAverageDecibels(bool fromEnd, float maximumDuration)
+    {
+        double weightedPower = 0d;
+        float measuredDuration = 0f;
+        int index = fromEnd ? _voicedLoudnessFrames.Count - 1 : 0;
+        int step = fromEnd ? -1 : 1;
+
+        while (index >= 0 && index < _voicedLoudnessFrames.Count &&
+               measuredDuration < maximumDuration)
+        {
+            LoudnessFrame frame = _voicedLoudnessFrames[index];
+            float includedDuration = Mathf.Min(
+                frame.Duration,
+                maximumDuration - measuredDuration);
+            weightedPower += Math.Pow(10d, frame.Decibels / 10d) * includedDuration;
+            measuredDuration += includedDuration;
+            index += step;
+        }
+
+        if (measuredDuration <= 0f)
+        {
+            return -80f;
+        }
+
+        return Mathf.Clamp(
+            10f * Mathf.Log10((float)(weightedPower / measuredDuration)),
+            -80f,
+            0f);
+    }
+
+    private void QueuePreRollLoudnessFrame(float decibels, float duration)
+    {
+        _preRollLoudnessFrames.Add(new LoudnessFrame(decibels, duration));
+        _preRollLoudnessDuration += duration;
+
+        while (_preRollLoudnessFrames.Count > 0 &&
+               _preRollLoudnessDuration > PreRollSampleCount / (float)MicrophoneSampleRate)
+        {
+            float excessDuration = _preRollLoudnessDuration -
+                PreRollSampleCount / (float)MicrophoneSampleRate;
+            LoudnessFrame oldestFrame = _preRollLoudnessFrames[0];
+
+            if (oldestFrame.Duration <= excessDuration)
+            {
+                _preRollLoudnessFrames.RemoveAt(0);
+                _preRollLoudnessDuration -= oldestFrame.Duration;
+                continue;
+            }
+
+            _preRollLoudnessFrames[0] = new LoudnessFrame(
+                oldestFrame.Decibels,
+                oldestFrame.Duration - excessDuration);
+            _preRollLoudnessDuration -= excessDuration;
+        }
+    }
+
     private void AppendToCaptureBuffer(float[] samples, int frameCount, int channels)
     {
         int byteCount = frameCount * 2;
@@ -1534,6 +1690,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         _activeMicrophoneDevice = null;
         _lastMicrophonePosition = -1;
         _microphoneLevel = 0f;
+        _preRollLoudnessFrames.Clear();
+        _preRollLoudnessDuration = 0f;
     }
 
     private string GetSelectedMicrophoneDevice()

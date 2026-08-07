@@ -30,6 +30,7 @@ public sealed class SessionManager : MonoBehaviour
 
     private ISession _session;
     private QuerySessionsResults _queryResults;
+    private NetworkChessGame _chessGame;
     private ScreenView _screen = ScreenView.Home;
     private Vector2 _sessionListScroll;
 
@@ -65,7 +66,9 @@ public sealed class SessionManager : MonoBehaviour
 
     public static bool IsFrontEndVisible =>
         _instance != null &&
-        (!NetworkPlayer.MatchStarted || _instance._showLobbyOverMatch);
+        (!NetworkPlayer.MatchStarted ||
+         _instance._showLobbyOverMatch ||
+         _instance.IsGameOver());
 
     private void Awake()
     {
@@ -100,7 +103,15 @@ public sealed class SessionManager : MonoBehaviour
 
         if (NetworkPlayer.MatchStarted && !_showLobbyOverMatch)
         {
-            DrawMatchLobbyButton();
+            NetworkChessGame chessGame = ResolveChessGame();
+
+            if (chessGame != null &&
+                chessGame.Winner != PlayerTeam.Unassigned &&
+                chessGame.IsGameOverPresentationReady)
+            {
+                DrawGameOverOverlay(chessGame.Winner);
+            }
+
             return;
         }
 
@@ -132,6 +143,78 @@ public sealed class SessionManager : MonoBehaviour
         }
 
         GUI.matrix = previousMatrix;
+    }
+
+    private void DrawGameOverOverlay(PlayerTeam winner)
+    {
+        DrawFullScreenBackground();
+
+        Matrix4x4 previousMatrix = GUI.matrix;
+        float scale = Mathf.Min(Screen.width / DesignWidth, Screen.height / DesignHeight);
+        float offsetX = (Screen.width - DesignWidth * scale) * 0.5f;
+        float offsetY = (Screen.height - DesignHeight * scale) * 0.5f;
+
+        GUI.matrix = Matrix4x4.TRS(
+            new Vector3(offsetX, offsetY, 0f),
+            Quaternion.identity,
+            new Vector3(scale, scale, 1f));
+
+        Rect panel = new(420f, 205f, 760f, 490f);
+        DrawShadowedPanel(panel, _panel);
+        GUI.Label(
+            new Rect(480f, 300f, 640f, 70f),
+            $"{winner.ToString().ToUpperInvariant()} TEAM WINS",
+            _heroTitle);
+
+        NetworkPlayer localPlayer = NetworkPlayer.LocalPlayer;
+        bool isHost = localPlayer != null && localPlayer.IsServer;
+
+        if (isHost)
+        {
+            if (DrawButton(
+                    new Rect(500f, 420f, 600f, 76f),
+                    "PLAY AGAIN",
+                    _accentButton))
+            {
+                localPlayer.StartMatch();
+            }
+
+            if (DrawButton(
+                    new Rect(500f, 520f, 600f, 76f),
+                    "RETURN TO LOBBY",
+                    _secondaryButton))
+            {
+                _screen = ScreenView.Lobby;
+                _showLobbyOverMatch = false;
+                localPlayer.ReturnToLobby();
+            }
+        }
+        else
+        {
+            GUI.Label(
+                new Rect(480f, 465f, 640f, 80f),
+                "Waiting for the host to choose the next round.",
+                _subtitle);
+        }
+
+        GUI.matrix = previousMatrix;
+    }
+
+    private bool IsGameOver()
+    {
+        NetworkChessGame chessGame = ResolveChessGame();
+        return chessGame != null &&
+               chessGame.Winner != PlayerTeam.Unassigned;
+    }
+
+    private NetworkChessGame ResolveChessGame()
+    {
+        if (_chessGame == null)
+        {
+            _chessGame = FindFirstObjectByType<NetworkChessGame>();
+        }
+
+        return _chessGame;
     }
 
     private void DrawHome()

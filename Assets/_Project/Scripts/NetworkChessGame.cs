@@ -24,6 +24,7 @@ public struct NetworkChessPieceState :
     public float BoardFile;
     public float BoardRank;
     public float VoiceHeading;
+    public float VoiceMoveHeadingOffset;
     public sbyte VoiceMoveAxis;
     public sbyte VoiceTurnAxis;
     public float VoiceMoveLoudness;
@@ -44,6 +45,7 @@ public struct NetworkChessPieceState :
         BoardFile = boardFile;
         BoardRank = boardRank;
         VoiceHeading = 0f;
+        VoiceMoveHeadingOffset = 0f;
         VoiceMoveAxis = 0;
         VoiceTurnAxis = 0;
         VoiceMoveLoudness = 0.5f;
@@ -61,6 +63,7 @@ public struct NetworkChessPieceState :
         serializer.SerializeValue(ref BoardFile);
         serializer.SerializeValue(ref BoardRank);
         serializer.SerializeValue(ref VoiceHeading);
+        serializer.SerializeValue(ref VoiceMoveHeadingOffset);
         serializer.SerializeValue(ref VoiceMoveAxis);
         serializer.SerializeValue(ref VoiceTurnAxis);
         serializer.SerializeValue(ref VoiceMoveLoudness);
@@ -77,6 +80,7 @@ public struct NetworkChessPieceState :
                BoardFile.Equals(other.BoardFile) &&
                BoardRank.Equals(other.BoardRank) &&
                VoiceHeading.Equals(other.VoiceHeading) &&
+               VoiceMoveHeadingOffset.Equals(other.VoiceMoveHeadingOffset) &&
                VoiceMoveAxis == other.VoiceMoveAxis &&
                VoiceTurnAxis == other.VoiceTurnAxis &&
                VoiceMoveLoudness.Equals(other.VoiceMoveLoudness) &&
@@ -132,6 +136,15 @@ public sealed class NetworkChessGame : NetworkBehaviour
     [Tooltip("How closely the contact must face the piece's travel direction. 0 is any forward contact, 1 is head-on only.")]
     [SerializeField, Range(0f, 1f)] private float minimumPlayerImpactAlignment = 0.25f;
 
+    [Header("King Death Cinematic")]
+    [SerializeField, Min(1f)] private float kingDeathCinematicDuration = 3f;
+    [SerializeField, Min(0.5f)] private float kingDeathCameraDistanceInSquares = 2.6f;
+    [SerializeField, Min(0.1f)] private float kingDeathCameraHeightInSquares = 1.15f;
+    [SerializeField, Min(0.1f)] private float kingDeathDropDistanceInSquares = 4f;
+    [SerializeField, Min(0f)] private float kingDeathOutwardDistanceInSquares = 1.1f;
+    [SerializeField, Range(0f, 180f)] private float kingDeathTiltAngle = 110f;
+    [SerializeField, Range(25f, 80f)] private float kingDeathCameraFieldOfView = 48f;
+
     private readonly NetworkList<NetworkChessPieceState> _pieces = new(
         readPerm: NetworkVariableReadPermission.Everyone,
         writePerm: NetworkVariableWritePermission.Server);
@@ -141,13 +154,30 @@ public sealed class NetworkChessGame : NetworkBehaviour
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    private readonly NetworkVariable<bool> _gameOverPresentationReady = new(
+        true,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     private readonly List<LocalVoiceGazeSample> _localVoiceGazeHistory = new();
     private int _localVoiceTargetPieceId = -1;
     private float _localCommanderFile = 3.5f;
     private float _localCommanderRank = 3.5f;
     private bool _visualRefreshPending;
+    private bool _kingDeathCinematicActive;
+    private float _kingDeathCinematicStartTime;
+    private float _kingDeathPieceHeight;
+    private float _kingDeathOriginalFieldOfView;
+    private GameObject _kingDeathVisual;
+    private Camera _kingDeathCamera;
+    private Vector3 _kingDeathStartPosition;
+    private Vector3 _kingDeathOutward;
+    private Vector3 _kingDeathCameraStartPosition;
+    private Quaternion _kingDeathStartRotation;
+    private Quaternion _kingDeathCameraStartRotation;
 
     public PlayerTeam Winner => _winner.Value;
+    public bool IsGameOverPresentationReady => _gameOverPresentationReady.Value;
 
     public bool HasLocalVoiceSelection =>
         _localVoiceTargetPieceId >= 0 &&
@@ -166,13 +196,31 @@ public sealed class NetworkChessGame : NetworkBehaviour
         }
 
         _pieces.OnListChanged += HandlePiecesChanged;
+        _winner.OnValueChanged += HandleWinnerChanged;
         _visualRefreshPending = true;
     }
 
     public override void OnNetworkDespawn()
     {
         _pieces.OnListChanged -= HandlePiecesChanged;
+        _winner.OnValueChanged -= HandleWinnerChanged;
+        CleanupKingDeathCinematic();
         ClearLocalVoiceTarget();
+    }
+
+    /// <summary>
+    /// Restores every piece to its starting square and clears the winner.
+    /// Match flow calls this on the server before a new round begins.
+    /// </summary>
+    public bool ResetGame()
+    {
+        if (!IsSpawned || !IsServer)
+        {
+            return false;
+        }
+
+        InitializePieces();
+        return true;
     }
 
     private void FixedUpdate()
@@ -229,26 +277,26 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
     private void LateUpdate()
     {
-        if (!_visualRefreshPending || pieceSpawner == null)
+        if (_visualRefreshPending && pieceSpawner != null)
         {
-            return;
+            _visualRefreshPending = false;
+            List<NetworkChessPieceState> visualStates = new(_pieces.Count);
+
+            for (int index = 0; index < _pieces.Count; index++)
+            {
+                visualStates.Add(_pieces[index]);
+            }
+
+            pieceSpawner.RebuildFromNetworkState(visualStates);
+
+            if (_localVoiceTargetPieceId >= 0 &&
+                FindPieceIndexById((ushort)_localVoiceTargetPieceId) < 0)
+            {
+                ClearLocalVoiceTarget();
+            }
         }
 
-        _visualRefreshPending = false;
-        List<NetworkChessPieceState> visualStates = new(_pieces.Count);
-
-        for (int index = 0; index < _pieces.Count; index++)
-        {
-            visualStates.Add(_pieces[index]);
-        }
-
-        pieceSpawner.RebuildFromNetworkState(visualStates);
-
-        if (_localVoiceTargetPieceId >= 0 &&
-            FindPieceIndexById((ushort)_localVoiceTargetPieceId) < 0)
-        {
-            ClearLocalVoiceTarget();
-        }
+        UpdateKingDeathCinematic();
     }
 
     private void InitializePieces()
@@ -279,6 +327,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
                 nextId++, PlayerTeam.Black, backRank[file], file, 7f));
         }
 
+        _gameOverPresentationReady.Value = true;
         _winner.Value = PlayerTeam.Unassigned;
     }
 
@@ -286,6 +335,18 @@ public sealed class NetworkChessGame : NetworkBehaviour
         NetworkListEvent<NetworkChessPieceState> changeEvent)
     {
         _visualRefreshPending = true;
+    }
+
+    private void HandleWinnerChanged(
+        PlayerTeam previousWinner,
+        PlayerTeam newWinner)
+    {
+        if (previousWinner != PlayerTeam.Unassigned &&
+            newWinner == PlayerTeam.Unassigned)
+        {
+            CleanupKingDeathCinematic();
+            ClearLocalVoiceTarget();
+        }
     }
 
     private Vector2 GetCommandedVelocity(NetworkChessPieceState piece)
@@ -297,7 +358,9 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
         float moveSpeed = voiceMoveSpeed * GetVoiceSpeedMultiplier(
             piece.VoiceMoveLoudness);
-        return GetVoiceMoveDirection(piece.OwnerTeam, piece.VoiceHeading) *
+        return GetVoiceMoveDirection(
+                   piece.OwnerTeam,
+                   piece.VoiceHeading + piece.VoiceMoveHeadingOffset) *
                (piece.VoiceMoveAxis * moveSpeed);
     }
 
@@ -408,10 +471,13 @@ public sealed class NetworkChessGame : NetworkBehaviour
         float boardMaximumEdge = pieceSpawner != null
             ? pieceSpawner.GroundMaximumCoordinate
             : 7.5f + ChessPieceSpawner.DefaultBoardBorderWidthInSquares;
-        return piece.BoardFile < boardMinimumEdge - ringOutDistance ||
-               piece.BoardFile > boardMaximumEdge + ringOutDistance ||
-               piece.BoardRank < boardMinimumEdge - ringOutDistance ||
-               piece.BoardRank > boardMaximumEdge + ringOutDistance;
+        float removalDistance = piece.PieceType == ChessPieceType.King
+            ? 0f
+            : ringOutDistance;
+        return piece.BoardFile < boardMinimumEdge - removalDistance ||
+               piece.BoardFile > boardMaximumEdge + removalDistance ||
+               piece.BoardRank < boardMinimumEdge - removalDistance ||
+               piece.BoardRank > boardMaximumEdge + removalDistance;
     }
 
     private void HandleRingOut(NetworkChessPieceState piece)
@@ -419,8 +485,234 @@ public sealed class NetworkChessGame : NetworkBehaviour
         if (piece.PieceType == ChessPieceType.King &&
             _winner.Value == PlayerTeam.Unassigned)
         {
+            _gameOverPresentationReady.Value = false;
+            BeginKingDeathCinematicRpc(piece);
             _winner.Value = GetOpponent(piece.OwnerTeam);
         }
+    }
+
+    [Rpc(
+        SendTo.Everyone,
+        InvokePermission = RpcInvokePermission.Server)]
+    private void BeginKingDeathCinematicRpc(NetworkChessPieceState kingState)
+    {
+        BeginKingDeathCinematic(kingState);
+    }
+
+    private void BeginKingDeathCinematic(NetworkChessPieceState kingState)
+    {
+        CleanupKingDeathCinematic();
+
+        if (pieceSpawner == null)
+        {
+            pieceSpawner = FindFirstObjectByType<ChessPieceSpawner>();
+        }
+
+        if (pieceSpawner == null)
+        {
+            if (IsServer)
+            {
+                _gameOverPresentationReady.Value = true;
+            }
+
+            return;
+        }
+
+        Vector2 boardPosition = new(kingState.BoardFile, kingState.BoardRank);
+        Vector2 edgePosition = new(
+            Mathf.Clamp(
+                boardPosition.x,
+                pieceSpawner.GroundMinimumCoordinate,
+                pieceSpawner.GroundMaximumCoordinate),
+            Mathf.Clamp(
+                boardPosition.y,
+                pieceSpawner.GroundMinimumCoordinate,
+                pieceSpawner.GroundMaximumCoordinate));
+        Vector2 outward = boardPosition - edgePosition;
+
+        if (outward.sqrMagnitude < 0.0001f)
+        {
+            outward = boardPosition - new Vector2(3.5f, 3.5f);
+        }
+
+        if (outward.sqrMagnitude < 0.0001f)
+        {
+            outward = Vector2.up;
+        }
+
+        outward.Normalize();
+        _kingDeathOutward = (
+            pieceSpawner.BoardRight * outward.x +
+            pieceSpawner.BoardForward * outward.y).normalized;
+        _kingDeathVisual = pieceSpawner.DetachKingForDeathCinematic(kingState);
+        _kingDeathStartPosition = _kingDeathVisual != null
+            ? _kingDeathVisual.transform.position
+            : pieceSpawner.GetBoardWorldPosition(edgePosition.x, edgePosition.y);
+        _kingDeathStartRotation = _kingDeathVisual != null
+            ? _kingDeathVisual.transform.rotation
+            : Quaternion.identity;
+        _kingDeathPieceHeight = GetVisualHeightAlongAxis(
+            _kingDeathVisual,
+            pieceSpawner.BoardUp);
+
+        float squareSize = Mathf.Min(
+            pieceSpawner.FileSpacing,
+            pieceSpawner.RankSpacing);
+
+        if (_kingDeathPieceHeight <= 0.001f)
+        {
+            _kingDeathPieceHeight = squareSize;
+        }
+
+        _kingDeathCamera = Camera.main;
+
+        if (_kingDeathCamera != null)
+        {
+            _kingDeathCameraStartPosition = _kingDeathCamera.transform.position;
+            _kingDeathCameraStartRotation = _kingDeathCamera.transform.rotation;
+            _kingDeathOriginalFieldOfView = _kingDeathCamera.fieldOfView;
+        }
+
+        _kingDeathCinematicStartTime = Time.unscaledTime;
+        _kingDeathCinematicActive = true;
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+    }
+
+    private void UpdateKingDeathCinematic()
+    {
+        if (!_kingDeathCinematicActive || pieceSpawner == null)
+        {
+            return;
+        }
+
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+
+        float duration = Mathf.Max(0.1f, kingDeathCinematicDuration);
+        float progress = Mathf.Clamp01(
+            (Time.unscaledTime - _kingDeathCinematicStartTime) / duration);
+        float easedProgress = Mathf.SmoothStep(0f, 1f, progress);
+        float squareSize = Mathf.Min(
+            pieceSpawner.FileSpacing,
+            pieceSpawner.RankSpacing);
+        Vector3 boardUp = pieceSpawner.BoardUp;
+        Vector3 currentPosition =
+            _kingDeathStartPosition +
+            _kingDeathOutward *
+            (kingDeathOutwardDistanceInSquares * squareSize * easedProgress) -
+            boardUp *
+            (kingDeathDropDistanceInSquares * squareSize * progress * progress);
+
+        if (_kingDeathVisual != null)
+        {
+            Vector3 tiltAxis = Vector3.Cross(_kingDeathOutward, boardUp).normalized;
+            Quaternion tilt = Quaternion.AngleAxis(
+                kingDeathTiltAngle * easedProgress,
+                tiltAxis);
+            _kingDeathVisual.transform.SetPositionAndRotation(
+                currentPosition,
+                tilt * _kingDeathStartRotation);
+        }
+
+        if (_kingDeathCamera != null)
+        {
+            Vector3 focusPoint = currentPosition +
+                boardUp * (_kingDeathPieceHeight * 0.45f);
+            Vector3 desiredCameraPosition = currentPosition -
+                _kingDeathOutward *
+                (kingDeathCameraDistanceInSquares * squareSize) +
+                boardUp *
+                (kingDeathCameraHeightInSquares * squareSize);
+            Quaternion desiredCameraRotation = Quaternion.LookRotation(
+                focusPoint - desiredCameraPosition,
+                boardUp);
+            float cameraBlend = Mathf.SmoothStep(
+                0f,
+                1f,
+                Mathf.Clamp01(progress / 0.18f));
+
+            _kingDeathCamera.transform.SetPositionAndRotation(
+                Vector3.Lerp(
+                    _kingDeathCameraStartPosition,
+                    desiredCameraPosition,
+                    cameraBlend),
+                Quaternion.Slerp(
+                    _kingDeathCameraStartRotation,
+                    desiredCameraRotation,
+                    cameraBlend));
+            _kingDeathCamera.fieldOfView = Mathf.Lerp(
+                _kingDeathOriginalFieldOfView,
+                kingDeathCameraFieldOfView,
+                cameraBlend);
+        }
+
+        if (progress < 1f)
+        {
+            return;
+        }
+
+        _kingDeathCinematicActive = false;
+
+        if (_kingDeathVisual != null)
+        {
+            Destroy(_kingDeathVisual);
+            _kingDeathVisual = null;
+        }
+
+        if (IsServer)
+        {
+            _gameOverPresentationReady.Value = true;
+        }
+
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    private void CleanupKingDeathCinematic()
+    {
+        _kingDeathCinematicActive = false;
+
+        if (_kingDeathVisual != null)
+        {
+            Destroy(_kingDeathVisual);
+            _kingDeathVisual = null;
+        }
+
+        if (_kingDeathCamera != null)
+        {
+            _kingDeathCamera.fieldOfView = _kingDeathOriginalFieldOfView;
+            _kingDeathCamera = null;
+        }
+    }
+
+    private static float GetVisualHeightAlongAxis(
+        GameObject visual,
+        Vector3 axis)
+    {
+        if (visual == null)
+        {
+            return 0f;
+        }
+
+        Renderer[] renderers = visual.GetComponentsInChildren<Renderer>();
+        float minimum = float.PositiveInfinity;
+        float maximum = float.NegativeInfinity;
+
+        foreach (Renderer visualRenderer in renderers)
+        {
+            Bounds bounds = visualRenderer.bounds;
+            float centre = Vector3.Dot(bounds.center, axis);
+            Vector3 extents = bounds.extents;
+            float projectedExtent =
+                Mathf.Abs(axis.x) * extents.x +
+                Mathf.Abs(axis.y) * extents.y +
+                Mathf.Abs(axis.z) * extents.z;
+            minimum = Mathf.Min(minimum, centre - projectedExtent);
+            maximum = Mathf.Max(maximum, centre + projectedExtent);
+        }
+
+        return renderers.Length > 0 ? maximum - minimum : 0f;
     }
 
     private static Vector2 GetStableCollisionNormal(ushort leftId, ushort rightId)
@@ -751,10 +1043,12 @@ public sealed class NetworkChessGame : NetworkBehaviour
         {
             case PieceVoiceCommand.MoveForward:
                 piece.VoiceMoveAxis = 1;
+                piece.VoiceMoveHeadingOffset = 0f;
                 piece.VoiceMoveLoudness = commandLoudness;
                 break;
             case PieceVoiceCommand.MoveBackward:
-                piece.VoiceMoveAxis = -1;
+                piece.VoiceMoveAxis = 1;
+                piece.VoiceMoveHeadingOffset = 180f;
                 piece.VoiceMoveLoudness = commandLoudness;
                 break;
             case PieceVoiceCommand.Stop:
@@ -768,6 +1062,36 @@ public sealed class NetworkChessGame : NetworkBehaviour
             case PieceVoiceCommand.TurnRight:
                 piece.VoiceTurnAxis = 1;
                 piece.VoiceTurnLoudness = commandLoudness;
+                break;
+            case PieceVoiceCommand.MoveLeft:
+                piece.VoiceMoveAxis = 1;
+                piece.VoiceMoveHeadingOffset = -90f;
+                piece.VoiceMoveLoudness = commandLoudness;
+                break;
+            case PieceVoiceCommand.MoveRight:
+                piece.VoiceMoveAxis = 1;
+                piece.VoiceMoveHeadingOffset = 90f;
+                piece.VoiceMoveLoudness = commandLoudness;
+                break;
+            case PieceVoiceCommand.MoveUpperRight:
+                piece.VoiceMoveAxis = 1;
+                piece.VoiceMoveHeadingOffset = 45f;
+                piece.VoiceMoveLoudness = commandLoudness;
+                break;
+            case PieceVoiceCommand.MoveUpperLeft:
+                piece.VoiceMoveAxis = 1;
+                piece.VoiceMoveHeadingOffset = -45f;
+                piece.VoiceMoveLoudness = commandLoudness;
+                break;
+            case PieceVoiceCommand.MoveLowerRight:
+                piece.VoiceMoveAxis = 1;
+                piece.VoiceMoveHeadingOffset = 135f;
+                piece.VoiceMoveLoudness = commandLoudness;
+                break;
+            case PieceVoiceCommand.MoveLowerLeft:
+                piece.VoiceMoveAxis = 1;
+                piece.VoiceMoveHeadingOffset = -135f;
+                piece.VoiceMoveLoudness = commandLoudness;
                 break;
             default:
                 return;
@@ -865,5 +1189,23 @@ public sealed class NetworkChessGame : NetworkBehaviour
         minimumPlayerImpactSpeed = Mathf.Max(0f, minimumPlayerImpactSpeed);
         minimumPlayerImpactAlignment = Mathf.Clamp01(
             minimumPlayerImpactAlignment);
+        kingDeathCinematicDuration = Mathf.Max(1f, kingDeathCinematicDuration);
+        kingDeathCameraDistanceInSquares = Mathf.Max(
+            0.5f,
+            kingDeathCameraDistanceInSquares);
+        kingDeathCameraHeightInSquares = Mathf.Max(
+            0.1f,
+            kingDeathCameraHeightInSquares);
+        kingDeathDropDistanceInSquares = Mathf.Max(
+            0.1f,
+            kingDeathDropDistanceInSquares);
+        kingDeathOutwardDistanceInSquares = Mathf.Max(
+            0f,
+            kingDeathOutwardDistanceInSquares);
+        kingDeathTiltAngle = Mathf.Clamp(kingDeathTiltAngle, 0f, 180f);
+        kingDeathCameraFieldOfView = Mathf.Clamp(
+            kingDeathCameraFieldOfView,
+            25f,
+            80f);
     }
 }

@@ -73,7 +73,7 @@ public sealed class OrbitCamera : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (InGameVoiceSettingsUI.IsOpen)
+        if (InGameVoiceSettingsUI.IsBlockingGameplay)
         {
             ApplyOrbit();
             return;

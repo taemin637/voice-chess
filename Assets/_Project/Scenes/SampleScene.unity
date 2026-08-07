@@ -1497,13 +1497,21 @@ MonoBehaviour:
   fileSpacing: 0.1
   rankSpacing: 0.1
   heightOffset: 0
-  stackHeight: 0.06
+  boardBorderWidthInSquares: 1.25
+  ringOutVisualDistance: 0.8
+  ringOutDropDistance: 2.5
+  ringOutTiltAngle: 82
   whiteRotationOffset: {x: 0, y: 180, z: 0}
   blackRotationOffset: {x: 0, y: 0, z: 0}
   generateOnStart: 1
   generatedRoot: {fileID: 415932164}
   selectionMarkerColor: {r: 1, g: 0.8, b: 0, a: 1}
   selectionMarkerSegments: 48
+  whiteHeadingArrowColor: {r: 0.1, g: 0.85, b: 1, a: 0.95}
+  blackHeadingArrowColor: {r: 1, g: 0.3, b: 0.15, a: 0.95}
+  headingArrowLengthInSquares: 0.72
+  headingArrowWidthInSquares: 0.065
+  headingArrowHeightInSquares: 0.025
 --- !u!4 &924815598
 Transform:
   m_ObjectHideFlags: 0
@@ -2971,6 +2979,25 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::NetworkChessGame
   ShowTopMostFoldoutHeaderGroup: 1
   pieceSpawner: {fileID: 0}
+  voiceMoveSpeed: 1.2
+  voiceTurnSpeed: 90
+  quietVoiceSpeedMultiplier: 0.25
+  loudVoiceSpeedMultiplier: 1.75
+  pieceCollisionRadius: 0.34
+  collisionRestitution: 1
+  collisionImpulseMultiplier: 1.5
+  knockbackDrag: 1.8
+  ringOutDistance: 0.8
+  playerPieceCollisionHeight: 0.6
+  minimumPlayerImpactSpeed: 0.08
+  minimumPlayerImpactAlignment: 0.25
+  kingDeathCinematicDuration: 3
+  kingDeathCameraDistanceInSquares: 2.6
+  kingDeathCameraHeightInSquares: 1.15
+  kingDeathDropDistanceInSquares: 4
+  kingDeathOutwardDistanceInSquares: 1.1
+  kingDeathTiltAngle: 91
+  kingDeathCameraFieldOfView: 48
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

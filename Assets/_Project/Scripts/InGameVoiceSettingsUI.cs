@@ -13,6 +13,7 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
     private readonly List<Texture2D> _generatedTextures = new();
 
     private AzureKoreanSpeechInput _speechInput;
+    private bool _pauseMenuOpen;
     private bool _open;
     private GUIStyle _panel;
     private GUIStyle _panelSoft;
@@ -21,14 +22,17 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
     private GUIStyle _buttonLight;
     private GUIStyle _buttonSelected;
     private GUIStyle _title;
+    private GUIStyle _menuTitle;
     private GUIStyle _section;
     private GUIStyle _body;
-    private GUIStyle _muted;
     private GUIStyle _small;
     private Texture2D _whiteTexture;
     private Texture2D _dimTexture;
 
     public static bool IsOpen => _instance != null && _instance._open;
+    public static bool IsBlockingGameplay =>
+        _instance != null &&
+        (_instance._pauseMenuOpen || _instance._open);
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
@@ -55,11 +59,28 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
             _speechInput = FindFirstObjectByType<AzureKoreanSpeechInput>();
         }
 
+        if (!NetworkPlayer.MatchStarted || SessionManager.IsFrontEndVisible)
+        {
+            _pauseMenuOpen = false;
+            _open = false;
+            return;
+        }
+
         Keyboard keyboard = Keyboard.current;
 
-        if (_open && keyboard != null && keyboard.escapeKey.wasPressedThisFrame)
+        if (keyboard == null || !keyboard.escapeKey.wasPressedThisFrame)
+        {
+            return;
+        }
+
+        if (_open)
         {
             _open = false;
+            _pauseMenuOpen = true;
+        }
+        else
+        {
+            _pauseMenuOpen = !_pauseMenuOpen;
         }
     }
 
@@ -67,7 +88,13 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
     {
         if (!NetworkPlayer.MatchStarted || SessionManager.IsFrontEndVisible)
         {
+            _pauseMenuOpen = false;
             _open = false;
+            return;
+        }
+
+        if (!_pauseMenuOpen && !_open)
+        {
             return;
         }
 
@@ -83,59 +110,41 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
             Quaternion.identity,
             new Vector3(scale, scale, 1f));
 
-        DrawVoiceHud();
-
-        if (GUI.Button(new Rect(1380f, 86f, 180f, 48f), "VOICE SETTINGS", _buttonDark))
-        {
-            _open = true;
-        }
-
         if (_open)
         {
             DrawSettingsModal();
+        }
+        else
+        {
+            DrawPauseMenu();
         }
 
         GUI.matrix = previousMatrix;
     }
 
-    private void DrawVoiceHud()
+    private void DrawPauseMenu()
     {
-        Rect rect = new(36f, 726f, 500f, 138f);
-        GUI.Box(rect, GUIContent.none, _panel);
+        GUI.DrawTexture(
+            new Rect(0f, 0f, DesignWidth, DesignHeight),
+            _dimTexture,
+            ScaleMode.StretchToFill);
 
-        GUI.Label(new Rect(58f, 742f, 250f, 28f), "VOICE COMMAND", _section);
-
-        bool ready = _speechInput != null &&
-                     _speechInput.IsMicrophoneRunning &&
-                     _speechInput.HasSpeechCredentials;
-        DrawStatusDot(new Rect(474f, 747f, 12f, 12f), ready);
-        GUI.Label(
-            new Rect(324f, 738f, 142f, 28f),
-            ready ? "READY" : "CHECK SETUP",
-            _small);
-
-        string status = _speechInput == null
-            ? "음성 입력을 준비하는 중입니다."
-            : _speechInput.Status;
-        GUI.Label(new Rect(58f, 776f, 306f, 58f), status, _muted);
-
-        bool previousEnabled = GUI.enabled;
-        bool pushToTalk = _speechInput != null &&
-                          _speechInput.InputMode == VoiceInputMode.PushToTalk;
-        bool canToggleInput = pushToTalk &&
-                               (!_speechInput.IsRecognitionInProgress ||
-                                _speechInput.IsCapturingSpeech);
-        GUI.enabled = canToggleInput;
+        Rect panelRect = new(500f, 260f, 600f, 380f);
+        GUI.Box(panelRect, GUIContent.none, _panel);
+        GUI.Label(new Rect(550f, 320f, 500f, 60f), "SETTINGS", _menuTitle);
 
         if (GUI.Button(
-                new Rect(374f, 782f, 136f, 48f),
-                GetListenButtonLabel(),
+                new Rect(590f, 430f, 420f, 82f),
+                "VOICE SETTINGS",
                 _buttonLight))
         {
-            _speechInput.RequestGameRecognition();
+            _open = true;
         }
 
-        GUI.enabled = previousEnabled;
+        GUI.Label(
+            new Rect(550f, 555f, 500f, 30f),
+            "PRESS ESC TO RETURN TO THE GAME",
+            _small);
     }
 
     private void DrawSettingsModal()
@@ -145,79 +154,28 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
             _dimTexture,
             ScaleMode.StretchToFill);
 
-        Rect panelRect = new(350f, 30f, 900f, 840f);
+        Rect panelRect = new(350f, 70f, 900f, 760f);
         GUI.Box(panelRect, GUIContent.none, _panel);
 
-        GUI.Label(new Rect(398f, 58f, 520f, 46f), "VOICE SETTINGS", _title);
-        GUI.Label(
-            new Rect(400f, 100f, 660f, 28f),
-            "자동 음성 감지, 마이크 장치와 Azure 한국어 음성 인식을 설정합니다.",
-            _muted);
+        GUI.Label(new Rect(398f, 102f, 520f, 46f), "VOICE SETTINGS", _title);
 
-        if (GUI.Button(new Rect(1162f, 52f, 48f, 42f), "×", _buttonDark))
+        if (GUI.Button(new Rect(1162f, 94f, 48f, 42f), "×", _buttonDark))
         {
             _open = false;
         }
 
-        DrawAzureStatus();
         DrawVoiceActivationSettings();
         DrawMicrophoneDevices();
         DrawInputLevel();
         DrawRecognitionTest();
-
-        if (GUI.Button(new Rect(1010f, 800f, 190f, 48f), "CLOSE", _buttonLight))
-        {
-            _open = false;
-        }
-    }
-
-    private string GetListenButtonLabel()
-    {
-        if (_speechInput == null)
-        {
-            return "VOICE OFF";
-        }
-
-        if (_speechInput.IsCapturingSpeech)
-        {
-            return "STOP";
-        }
-
-        if (_speechInput.IsRecognitionInProgress)
-        {
-            return "ANALYZING...";
-        }
-
-        return _speechInput.InputMode == VoiceInputMode.Automatic
-            ? _speechInput.IsNoiseCalibrating
-                ? "CALIBRATING"
-                : "AUTO LISTEN"
-            : "HOLD  [V]";
-    }
-
-    private void DrawAzureStatus()
-    {
-        Rect row = new(398f, 142f, 804f, 60f);
-        GUI.Box(row, GUIContent.none, _row);
-        GUI.Label(new Rect(422f, 157f, 200f, 24f), "AZURE SPEECH", _section);
-
-        bool configured = _speechInput != null && _speechInput.HasSpeechCredentials;
-        DrawStatusDot(new Rect(1136f, 166f, 12f, 12f), configured);
-        GUI.Label(
-            new Rect(920f, 156f, 204f, 28f),
-            configured
-                ? $"CONNECTED · {_speechInput.SpeechRegion}"
-                : "KEY / REGION REQUIRED",
-            _small);
     }
 
     private void DrawVoiceActivationSettings()
     {
-        GUI.Label(new Rect(400f, 218f, 300f, 30f), "VOICE ACTIVATION", _section);
+        GUI.Label(new Rect(400f, 184f, 300f, 30f), "VOICE ACTIVATION", _section);
 
         if (_speechInput == null)
         {
-            GUI.Label(new Rect(400f, 254f, 802f, 80f), "음성 시스템 준비 중", _muted);
             return;
         }
 
@@ -225,7 +183,7 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
         GUI.enabled = !_speechInput.IsRecognitionInProgress;
 
         if (GUI.Button(
-                new Rect(400f, 252f, 190f, 42f),
+                new Rect(400f, 222f, 190f, 48f),
                 "AUTOMATIC",
                 _speechInput.InputMode == VoiceInputMode.Automatic
                     ? _buttonSelected
@@ -235,7 +193,7 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
         }
 
         if (GUI.Button(
-                new Rect(600f, 252f, 190f, 42f),
+                new Rect(600f, 222f, 190f, 48f),
                 "HOLD [V]",
                 _speechInput.InputMode == VoiceInputMode.PushToTalk
                     ? _buttonSelected
@@ -244,62 +202,31 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
             _speechInput.SetInputMode(VoiceInputMode.PushToTalk);
         }
 
-        GUI.Label(new Rect(814f, 246f, 190f, 22f), "SENSITIVITY", _small);
+        GUI.Label(new Rect(814f, 184f, 220f, 30f), "SENSITIVITY", _section);
         float sensitivity = GUI.HorizontalSlider(
-            new Rect(814f, 276f, 180f, 18f),
+            new Rect(814f, 240f, 388f, 18f),
             _speechInput.VoiceSensitivity,
             0f,
             1f);
         _speechInput.SetVoiceSensitivity(sensitivity);
-        GUI.Label(
-            new Rect(1004f, 258f, 74f, 28f),
-            $"{sensitivity * 100f:F0}%",
-            _small);
-
-        string noiseButton = _speechInput.AutomaticNoiseCalibration
-            ? "AUTO NOISE  ON"
-            : "AUTO NOISE  OFF";
-
-        if (GUI.Button(new Rect(400f, 306f, 190f, 42f), noiseButton, _buttonDark))
-        {
-            _speechInput.SetAutomaticNoiseCalibration(
-                !_speechInput.AutomaticNoiseCalibration);
-        }
-
-        if (GUI.Button(new Rect(600f, 306f, 190f, 42f), "RECALIBRATE", _buttonDark))
-        {
-            _speechInput.RecalibrateNoiseFloor();
-        }
-
-        GUI.Label(
-            new Rect(814f, 304f, 388f, 46f),
-            _speechInput.IsNoiseCalibrating
-                ? "CALIBRATING · 잠시 말하지 마세요"
-                : $"NOISE {_speechInput.NoiseFloorDecibels:F1} dBFS  /  " +
-                  $"TRIGGER {_speechInput.VoiceActivationThresholdDecibels:F1} dBFS",
-            _muted);
 
         GUI.enabled = previousEnabled;
     }
 
     private void DrawMicrophoneDevices()
     {
-        GUI.Label(new Rect(400f, 366f, 260f, 30f), "MIC INPUT", _section);
+        GUI.Label(new Rect(400f, 308f, 260f, 30f), "MIC INPUT", _section);
 
         bool previousEnabled = GUI.enabled;
         GUI.enabled = _speechInput != null && !_speechInput.IsRecognitionInProgress;
 
-        if (GUI.Button(new Rect(1060f, 360f, 142f, 38f), "REFRESH", _buttonDark))
+        if (GUI.Button(new Rect(1060f, 300f, 142f, 42f), "REFRESH", _buttonDark))
         {
             _speechInput.RefreshMicrophoneDevices();
         }
 
         if (_speechInput == null || _speechInput.MicrophoneDevices.Count == 0)
         {
-            GUI.Label(
-                new Rect(400f, 408f, 802f, 54f),
-                "사용 가능한 마이크를 찾지 못했습니다.",
-                _muted);
             GUI.enabled = previousEnabled;
             return;
         }
@@ -312,9 +239,9 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
             int row = index / 2;
             Rect buttonRect = new(
                 398f + column * 410f,
-                404f + row * 52f,
+                352f + row * 54f,
                 394f,
-                44f);
+                46f);
             bool selected = index == _speechInput.SelectedMicrophoneIndex;
 
             if (GUI.Button(
@@ -331,9 +258,9 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
 
     private void DrawInputLevel()
     {
-        GUI.Label(new Rect(400f, 512f, 300f, 30f), "INPUT LEVEL", _section);
+        GUI.Label(new Rect(400f, 486f, 300f, 30f), "INPUT LEVEL", _section);
 
-        Rect meterBackground = new(400f, 548f, 802f, 22f);
+        Rect meterBackground = new(400f, 528f, 802f, 24f);
         GUI.Box(meterBackground, GUIContent.none, _panelSoft);
         Rect fill = new(
             meterBackground.x,
@@ -341,39 +268,21 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
             meterBackground.width * (_speechInput?.MicrophoneLevel ?? 0f),
             meterBackground.height);
         GUI.DrawTexture(fill, _whiteTexture, ScaleMode.StretchToFill);
-
-        float currentDb = _speechInput?.MicrophoneDecibels ?? -80f;
-        float peakDb = _speechInput?.PeakMicrophoneDecibels ?? -80f;
-        GUI.Label(
-            new Rect(400f, 578f, 400f, 28f),
-            $"CURRENT {currentDb:F1} dBFS   /   PEAK {peakDb:F1} dBFS",
-            _muted);
-
-        bool signal = _speechInput != null && _speechInput.HasDetectedMicrophoneSignal;
-        DrawStatusDot(new Rect(1138f, 586f, 12f, 12f), signal);
-        GUI.Label(
-            new Rect(928f, 576f, 194f, 28f),
-            signal ? "INPUT DETECTED" : "NO SIGNAL",
-            _small);
     }
 
     private void DrawRecognitionTest()
     {
-        GUI.Label(new Rect(400f, 618f, 320f, 30f), "RECOGNITION TEST", _section);
-        GUI.Label(
-            new Rect(730f, 618f, 472f, 30f),
-            "START → SPEAK → STOP & ANALYZE",
-            _small);
+        GUI.Label(new Rect(400f, 600f, 320f, 30f), "RECOGNITION TEST", _section);
 
-        Rect transcriptRect = new(400f, 654f, 566f, 120f);
+        Rect transcriptRect = new(400f, 642f, 566f, 120f);
         GUI.Box(transcriptRect, GUIContent.none, _row);
         string transcript = _speechInput == null
             ? "음성 시스템을 준비하는 중입니다."
             : string.IsNullOrWhiteSpace(_speechInput.LastTranscript)
                 ? _speechInput.Status
-                : $"“{_speechInput.LastTranscript}”\n{_speechInput.Status}";
+                : $"“{_speechInput.LastTranscript}”";
         GUI.Label(
-            new Rect(422f, 666f, 520f, 96f),
+            new Rect(422f, 654f, 520f, 96f),
             transcript,
             _body);
 
@@ -387,7 +296,7 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
         GUI.enabled = canStartTest || canStopTest;
 
         if (GUI.Button(
-                new Rect(984f, 654f, 218f, 120f),
+                new Rect(984f, 642f, 218f, 120f),
                 _speechInput != null && _speechInput.IsCapturingSpeech
                     ? "STOP & ANALYZE"
                     : _speechInput != null && _speechInput.IsRecognitionInProgress
@@ -399,14 +308,6 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
         }
 
         GUI.enabled = previousEnabled;
-    }
-
-    private void DrawStatusDot(Rect rect, bool active)
-    {
-        Color previousColor = GUI.color;
-        GUI.color = active ? Color.white : new Color32(92, 92, 92, 255);
-        GUI.DrawTexture(rect, _whiteTexture, ScaleMode.StretchToFill);
-        GUI.color = previousColor;
     }
 
     private void EnsureStyles()
@@ -440,9 +341,9 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
             15,
             10);
         _title = MakeLabelStyle(34, Color.white, FontStyle.Bold, TextAnchor.MiddleLeft);
+        _menuTitle = MakeLabelStyle(38, Color.white, FontStyle.Bold, TextAnchor.MiddleCenter);
         _section = MakeLabelStyle(18, Color.white, FontStyle.Bold, TextAnchor.MiddleLeft);
         _body = MakeLabelStyle(16, new Color32(235, 235, 235, 255), FontStyle.Bold, TextAnchor.MiddleLeft);
-        _muted = MakeLabelStyle(14, new Color32(160, 160, 160, 255), FontStyle.Normal, TextAnchor.MiddleLeft);
         _small = MakeLabelStyle(12, new Color32(205, 205, 205, 255), FontStyle.Bold, TextAnchor.MiddleRight);
     }
 

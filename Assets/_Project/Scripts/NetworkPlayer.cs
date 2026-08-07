@@ -13,7 +13,7 @@ public sealed class NetworkPlayer : NetworkBehaviour
 {
     private const int MaxPlayersPerTeam = 2;
     private const float AvatarPoseSendInterval = 1f / 20f;
-    private const float AvatarHeightInSquares = 0.34f;
+    private const float AvatarHeightInSquares = 0.68f;
     private const float AvatarRadiusInSquares = 0.16f;
 
     private static readonly List<NetworkPlayer> SpawnedPlayers = new();
@@ -258,9 +258,9 @@ public sealed class NetworkPlayer : NetworkBehaviour
 
         if (spawner.TryGetRepresentativePieceHeight(out float pieceHeight))
         {
-            // Keep the first-person eye (configured as a fraction of piece
-            // height) inside the upper part of the visible capsule.
-            capsuleHeight = Mathf.Max(capsuleHeight, pieceHeight * 0.3f);
+            // Keep the doubled first-person eye height inside the upper part
+            // of the correspondingly taller visible capsule.
+            capsuleHeight = Mathf.Max(capsuleHeight, pieceHeight * 0.6f);
         }
 
         float capsuleDiameter = AvatarRadiusInSquares * 2f * squareSize;
@@ -367,6 +367,16 @@ public sealed class NetworkPlayer : NetworkBehaviour
         RequestStartMatchRpc();
     }
 
+    public void ReturnToLobby()
+    {
+        if (!IsSpawned || !IsOwner || !IsServer)
+        {
+            return;
+        }
+
+        RequestReturnToLobbyRpc();
+    }
+
     [Rpc(
         SendTo.Server,
         InvokePermission = RpcInvokePermission.Owner)]
@@ -411,9 +421,42 @@ public sealed class NetworkPlayer : NetworkBehaviour
         InvokePermission = RpcInvokePermission.Owner)]
     private void RequestStartMatchRpc()
     {
+        if (!IsServer)
+        {
+            return;
+        }
+
+        NetworkChessGame chessGame = FindFirstObjectByType<NetworkChessGame>();
+
+        if (chessGame == null || !chessGame.ResetGame())
+        {
+            Debug.LogError(
+                "Cannot start the match because NetworkChessGame is not ready.");
+            return;
+        }
+
+        SetMatchStartedForAll(true);
+    }
+
+    [Rpc(
+        SendTo.Server,
+        InvokePermission = RpcInvokePermission.Owner)]
+    private void RequestReturnToLobbyRpc()
+    {
         if (IsServer)
         {
-            _matchStarted.Value = true;
+            SetMatchStartedForAll(false);
+        }
+    }
+
+    private static void SetMatchStartedForAll(bool started)
+    {
+        foreach (NetworkPlayer player in SpawnedPlayers)
+        {
+            if (player != null && player.IsSpawned && player.IsServer)
+            {
+                player._matchStarted.Value = started;
+            }
         }
     }
 

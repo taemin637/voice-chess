@@ -93,12 +93,19 @@ public static class KoreanVoiceCommandParser
         new("이동 중지", PieceVoiceCommand.Stop),
         new("여기서 멈춰", PieceVoiceCommand.Stop),
 
+        new("오른쪽 위로 가", PieceVoiceCommand.MoveUpperRight),
+        new("왼쪽 위로 가", PieceVoiceCommand.MoveUpperLeft),
+        new("오른쪽 아래로 가", PieceVoiceCommand.MoveLowerRight),
+        new("왼쪽 아래로 가", PieceVoiceCommand.MoveLowerLeft),
+
+        new("왼쪽으로 가", PieceVoiceCommand.MoveLeft),
         new("왼쪽으로 돌아", PieceVoiceCommand.TurnLeft),
         new("왼쪽으로 회전", PieceVoiceCommand.TurnLeft),
         new("왼쪽으로 틀어", PieceVoiceCommand.TurnLeft),
         new("좌회전", PieceVoiceCommand.TurnLeft),
         new("좌측으로 돌아", PieceVoiceCommand.TurnLeft),
 
+        new("오른쪽으로 가", PieceVoiceCommand.MoveRight),
         new("오른쪽으로 돌아", PieceVoiceCommand.TurnRight),
         new("오른쪽으로 회전", PieceVoiceCommand.TurnRight),
         new("오른쪽으로 틀어", PieceVoiceCommand.TurnRight),
@@ -398,6 +405,10 @@ public static class KoreanVoiceCommandParser
 
         bool moveAction = ContainsAny(text, "가", "이동", "나아", "진행", "전진", "직진", "후진");
         bool backwardDirection = ContainsAny(text, "뒤", "후진");
+        bool leftDirection = ContainsAny(text, "왼쪽", "왼", "좌측", "좌회전");
+        bool rightDirection = ContainsAny(text, "오른쪽", "오른", "우측", "우회전");
+        bool upperDirection = ContainsAny(text, "위", "위쪽");
+        bool lowerDirection = ContainsAny(text, "아래", "밑");
 
         if (backwardDirection && moveAction)
         {
@@ -412,7 +423,73 @@ public static class KoreanVoiceCommandParser
 
         bool turnAction = ContainsAny(text, "돌", "회전", "틀", "꺾", "방향전환");
 
-        if (turnAction && ContainsAny(text, "왼쪽", "왼", "좌측", "좌회전"))
+        if (rightDirection && upperDirection && moveAction && !turnAction)
+        {
+            result = Accepted(
+                PieceVoiceCommand.MoveUpperRight,
+                normalized,
+                "오른쪽 위로 이동",
+                0.97f,
+                "오른쪽 + 위 방향 + 이동 핵심어 감지");
+            return true;
+        }
+
+        if (leftDirection && upperDirection && moveAction && !turnAction)
+        {
+            result = Accepted(
+                PieceVoiceCommand.MoveUpperLeft,
+                normalized,
+                "왼쪽 위로 이동",
+                0.97f,
+                "왼쪽 + 위 방향 + 이동 핵심어 감지");
+            return true;
+        }
+
+        if (rightDirection && lowerDirection && moveAction && !turnAction)
+        {
+            result = Accepted(
+                PieceVoiceCommand.MoveLowerRight,
+                normalized,
+                "오른쪽 아래로 이동",
+                0.97f,
+                "오른쪽 + 아래 방향 + 이동 핵심어 감지");
+            return true;
+        }
+
+        if (leftDirection && lowerDirection && moveAction && !turnAction)
+        {
+            result = Accepted(
+                PieceVoiceCommand.MoveLowerLeft,
+                normalized,
+                "왼쪽 아래로 이동",
+                0.97f,
+                "왼쪽 + 아래 방향 + 이동 핵심어 감지");
+            return true;
+        }
+
+        if (leftDirection && moveAction && !turnAction)
+        {
+            result = Accepted(
+                PieceVoiceCommand.MoveLeft,
+                normalized,
+                "왼쪽으로 이동",
+                0.95f,
+                "왼쪽 방향 + 이동 핵심어 감지");
+            return true;
+        }
+
+        if (rightDirection && moveAction && !turnAction)
+        {
+            result = Accepted(
+                PieceVoiceCommand.MoveRight,
+                normalized,
+                "오른쪽으로 이동",
+                0.95f,
+                "오른쪽 방향 + 이동 핵심어 감지");
+            return true;
+        }
+
+        if (turnAction && leftDirection)
         {
             result = Accepted(
                 PieceVoiceCommand.TurnLeft,
@@ -423,7 +500,7 @@ public static class KoreanVoiceCommandParser
             return true;
         }
 
-        if (turnAction && ContainsAny(text, "오른쪽", "오른", "우측", "우회전"))
+        if (turnAction && rightDirection)
         {
             result = Accepted(
                 PieceVoiceCommand.TurnRight,
@@ -469,6 +546,8 @@ public static class KoreanVoiceCommandParser
         bool mentionsLeft = ContainsAny(text, "왼쪽", "왼", "좌측", "좌회전");
         bool mentionsRight = ContainsAny(text, "오른쪽", "오른", "우측", "우회전");
         bool mentionsBackward = ContainsAny(text, "뒤", "후진");
+        bool mentionsUpper = ContainsAny(text, "위", "위쪽");
+        bool mentionsLower = ContainsAny(text, "아래", "밑");
 
         return command switch
         {
@@ -476,6 +555,12 @@ public static class KoreanVoiceCommandParser
             PieceVoiceCommand.MoveBackward => mentionsLeft || mentionsRight,
             PieceVoiceCommand.TurnLeft => mentionsRight || mentionsBackward,
             PieceVoiceCommand.TurnRight => mentionsLeft || mentionsBackward,
+            PieceVoiceCommand.MoveLeft => mentionsRight || mentionsBackward || mentionsUpper || mentionsLower,
+            PieceVoiceCommand.MoveRight => mentionsLeft || mentionsBackward || mentionsUpper || mentionsLower,
+            PieceVoiceCommand.MoveUpperRight => mentionsLeft || mentionsBackward || mentionsLower,
+            PieceVoiceCommand.MoveUpperLeft => mentionsRight || mentionsBackward || mentionsLower,
+            PieceVoiceCommand.MoveLowerRight => mentionsLeft || mentionsUpper,
+            PieceVoiceCommand.MoveLowerLeft => mentionsRight || mentionsUpper,
             _ => mentionsLeft || mentionsRight || mentionsBackward
         };
     }

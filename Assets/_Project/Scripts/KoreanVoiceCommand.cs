@@ -8,7 +8,13 @@ public enum PieceVoiceCommand : byte
     MoveBackward,
     Stop,
     TurnLeft,
-    TurnRight
+    TurnRight,
+    MoveLeft,
+    MoveRight,
+    MoveUpperRight,
+    MoveUpperLeft,
+    MoveLowerRight,
+    MoveLowerLeft
 }
 
 public static class KoreanVoiceCommand
@@ -32,13 +38,20 @@ public static class KoreanVoiceCommand
         ["이동중지"] = PieceVoiceCommand.Stop,
 
         ["왼쪽회전"] = PieceVoiceCommand.TurnLeft,
+        ["왼쪽으로가"] = PieceVoiceCommand.MoveLeft,
         ["왼쪽으로돌아"] = PieceVoiceCommand.TurnLeft,
         ["좌회전"] = PieceVoiceCommand.TurnLeft,
 
         ["오른쪽회전"] = PieceVoiceCommand.TurnRight,
+        ["오른쪽으로가"] = PieceVoiceCommand.MoveRight,
         ["오른쪽으로돌아"] = PieceVoiceCommand.TurnRight,
         ["옆으로돌아"] = PieceVoiceCommand.TurnRight,
-        ["우회전"] = PieceVoiceCommand.TurnRight
+        ["우회전"] = PieceVoiceCommand.TurnRight,
+
+        ["오른쪽위로가"] = PieceVoiceCommand.MoveUpperRight,
+        ["왼쪽위로가"] = PieceVoiceCommand.MoveUpperLeft,
+        ["오른쪽아래로가"] = PieceVoiceCommand.MoveLowerRight,
+        ["왼쪽아래로가"] = PieceVoiceCommand.MoveLowerLeft
     };
 
     public static IReadOnlyCollection<string> PhraseHints { get; } = new[]
@@ -57,12 +70,18 @@ public static class KoreanVoiceCommand
         "정지",
         "이동 중지",
         "왼쪽 회전",
+        "왼쪽으로 가",
         "왼쪽으로 돌아",
         "좌회전",
         "오른쪽 회전",
+        "오른쪽으로 가",
         "오른쪽으로 돌아",
         "옆으로 돌아",
-        "우회전"
+        "우회전",
+        "오른쪽 위로 가",
+        "왼쪽 위로 가",
+        "오른쪽 아래로 가",
+        "왼쪽 아래로 가"
     };
 
     public static bool TryParse(string recognizedText, out PieceVoiceCommand command)
@@ -79,6 +98,12 @@ public static class KoreanVoiceCommand
             PieceVoiceCommand.Stop => "멈춰",
             PieceVoiceCommand.TurnLeft => "왼쪽 회전",
             PieceVoiceCommand.TurnRight => "오른쪽 회전",
+            PieceVoiceCommand.MoveLeft => "왼쪽으로 이동",
+            PieceVoiceCommand.MoveRight => "오른쪽으로 이동",
+            PieceVoiceCommand.MoveUpperRight => "오른쪽 위로 이동",
+            PieceVoiceCommand.MoveUpperLeft => "왼쪽 위로 이동",
+            PieceVoiceCommand.MoveLowerRight => "오른쪽 아래로 이동",
+            PieceVoiceCommand.MoveLowerLeft => "왼쪽 아래로 이동",
             _ => command.ToString()
         };
     }

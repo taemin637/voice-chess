@@ -57,6 +57,9 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         public ChessPieceType PieceType;
         public Vector3 TargetPosition;
         public Quaternion TargetRotation;
+        public float CurrentHeading;
+        public float TargetHeading;
+        public GameObject HeadingArrow;
         public Renderer[] Renderers;
     }
 
@@ -118,8 +121,18 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     [SerializeField] private Color selectionMarkerColor = new(1f, 0.8f, 0f, 1f);
     [SerializeField, Range(16, 96)] private int selectionMarkerSegments = 48;
 
+    [Header("Piece Heading Arrow")]
+    [SerializeField] private Color whiteHeadingArrowColor = new(0.1f, 0.85f, 1f, 0.95f);
+    [SerializeField] private Color blackHeadingArrowColor = new(1f, 0.3f, 0.15f, 0.95f);
+    [SerializeField, Range(0.3f, 1f)] private float headingArrowLengthInSquares = 0.72f;
+    [SerializeField, Range(0.02f, 0.15f)] private float headingArrowWidthInSquares = 0.065f;
+    [SerializeField, Range(0.005f, 0.1f)] private float headingArrowHeightInSquares = 0.025f;
+
     private GameObject selectionMarker;
     private Material selectionMarkerMaterial;
+    private Material whiteHeadingArrowMaterial;
+    private Material blackHeadingArrowMaterial;
+    private Mesh headingArrowMesh;
     private bool networkVisualMode;
     private GameObject voiceQuestionMark;
     private TextMesh voiceQuestionMarkText;
@@ -185,6 +198,11 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             pieceTransform.SetPositionAndRotation(
                 Vector3.Lerp(pieceTransform.position, visual.TargetPosition, blend),
                 Quaternion.Slerp(pieceTransform.rotation, visual.TargetRotation, blend));
+            visual.CurrentHeading = Mathf.LerpAngle(
+                visual.CurrentHeading,
+                visual.TargetHeading,
+                blend);
+            UpdateHeadingArrow(visual, pieceTransform.position);
         }
 
         UpdateVoiceQuestionMark();
@@ -693,6 +711,11 @@ public sealed class ChessPieceSpawner : MonoBehaviour
                     Destroy(visual.Instance);
                 }
 
+                if (visual?.HeadingArrow != null)
+                {
+                    Destroy(visual.HeadingArrow);
+                }
+
                 visual = CreateNetworkPieceVisual(prefab, pieceState);
                 networkPieceVisuals[pieceState.Id] = visual;
             }
@@ -704,6 +727,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             visual.PieceType = pieceState.PieceType;
             visual.TargetPosition = GetNetworkPiecePosition(pieceState);
             visual.TargetRotation = GetNetworkPieceRotation(prefab, pieceState);
+            visual.TargetHeading = pieceState.VoiceHeading;
         }
 
         List<ushort> removedIds = new();
@@ -720,6 +744,11 @@ public sealed class ChessPieceSpawner : MonoBehaviour
                 Destroy(pair.Value.Instance);
             }
 
+            if (pair.Value.HeadingArrow != null)
+            {
+                Destroy(pair.Value.HeadingArrow);
+            }
+
             removedIds.Add(pair.Key);
         }
 
@@ -729,6 +758,86 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Detaches the king visual from normal network-state rebuilding so a local
+    /// death cinematic can continue after the authoritative piece is removed.
+    /// </summary>
+    public GameObject DetachKingForDeathCinematic(
+        NetworkChessPieceState kingState)
+    {
+        GameObject prefab = GetPiecePrefab(
+            kingState.OwnerTeam,
+            ChessPieceType.King);
+        GameObject instance = null;
+
+        if (networkPieceVisuals.TryGetValue(
+                kingState.Id,
+                out NetworkPieceVisual visual))
+        {
+            instance = visual.Instance;
+
+            if (visual.HeadingArrow != null)
+            {
+                Destroy(visual.HeadingArrow);
+                visual.HeadingArrow = null;
+            }
+
+            networkPieceVisuals.Remove(kingState.Id);
+        }
+
+        NetworkChessPieceState edgeState = kingState;
+        edgeState.BoardFile = Mathf.Clamp(
+            edgeState.BoardFile,
+            GroundMinimumCoordinate,
+            GroundMaximumCoordinate);
+        edgeState.BoardRank = Mathf.Clamp(
+            edgeState.BoardRank,
+            GroundMinimumCoordinate,
+            GroundMaximumCoordinate);
+
+        if (instance == null && prefab != null)
+        {
+            instance = Instantiate(prefab);
+        }
+
+        if (instance == null)
+        {
+            return null;
+        }
+
+        Quaternion rotation = prefab != null
+            ? GetNetworkPieceRotation(prefab, edgeState)
+            : instance.transform.rotation;
+        instance.name = $"{kingState.OwnerTeam}_King_Death_Cinematic";
+        instance.transform.SetParent(null, worldPositionStays: true);
+        instance.transform.SetPositionAndRotation(
+            GetNetworkPiecePosition(edgeState),
+            rotation);
+
+        foreach (Collider pieceCollider in instance.GetComponentsInChildren<Collider>())
+        {
+            pieceCollider.enabled = false;
+        }
+
+        foreach (Rigidbody rigidbody in instance.GetComponentsInChildren<Rigidbody>())
+        {
+            rigidbody.isKinematic = true;
+            rigidbody.useGravity = false;
+        }
+
+        if (voiceSelectionPieceId == kingState.Id)
+        {
+            SetVoiceSelectionTarget(null);
+        }
+
+        if (voiceCommandPieceId == kingState.Id)
+        {
+            SetVoiceCommandTarget(null);
+        }
+
+        return instance;
+    }
+
     private NetworkPieceVisual CreateNetworkPieceVisual(
         GameObject prefab,
         NetworkChessPieceState pieceState)
@@ -736,16 +845,141 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         Vector3 position = GetNetworkPiecePosition(pieceState);
         Quaternion rotation = GetNetworkPieceRotation(prefab, pieceState);
         GameObject instance = Instantiate(prefab, position, rotation, generatedRoot);
-
-        return new NetworkPieceVisual
+        NetworkPieceVisual visual = new()
         {
             Instance = instance,
             Team = pieceState.OwnerTeam,
             PieceType = pieceState.PieceType,
             TargetPosition = position,
             TargetRotation = rotation,
+            CurrentHeading = pieceState.VoiceHeading,
+            TargetHeading = pieceState.VoiceHeading,
             Renderers = instance.GetComponentsInChildren<Renderer>(includeInactive: false)
         };
+
+        visual.HeadingArrow = CreateHeadingArrow(visual);
+        UpdateHeadingArrow(visual, position);
+        return visual;
+    }
+
+    private GameObject CreateHeadingArrow(NetworkPieceVisual visual)
+    {
+        GameObject arrowObject = new("Heading Arrow");
+        arrowObject.transform.SetParent(generatedRoot, true);
+
+        MeshFilter meshFilter = arrowObject.AddComponent<MeshFilter>();
+        meshFilter.sharedMesh = GetHeadingArrowMesh();
+
+        MeshRenderer meshRenderer = arrowObject.AddComponent<MeshRenderer>();
+        meshRenderer.sharedMaterial = GetHeadingArrowMaterial(visual.Team);
+        meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        meshRenderer.receiveShadows = false;
+        return arrowObject;
+    }
+
+    private void UpdateHeadingArrow(
+        NetworkPieceVisual visual,
+        Vector3 piecePosition)
+    {
+        if (visual.HeadingArrow == null)
+        {
+            return;
+        }
+
+        float squareSize = Mathf.Min(fileSpacing, rankSpacing);
+        float length = squareSize * headingArrowLengthInSquares;
+        float width = squareSize * headingArrowWidthInSquares;
+        Vector3 direction = GetWorldHeadingDirection(
+            visual.Team,
+            visual.CurrentHeading);
+        Vector3 centre = piecePosition +
+            BoardUp * (squareSize * headingArrowHeightInSquares);
+        Transform arrowTransform = visual.HeadingArrow.transform;
+        arrowTransform.SetPositionAndRotation(
+            centre,
+            Quaternion.LookRotation(direction, BoardUp));
+        arrowTransform.localScale = new Vector3(width, 1f, length);
+    }
+
+    private Mesh GetHeadingArrowMesh()
+    {
+        if (headingArrowMesh != null)
+        {
+            return headingArrowMesh;
+        }
+
+        headingArrowMesh = new Mesh
+        {
+            name = "Piece Heading Arrow Mesh",
+            vertices = new[]
+            {
+                new Vector3(-0.5f, 0f, 0f),
+                new Vector3(0.5f, 0f, 0f),
+                new Vector3(0.5f, 0f, 0.58f),
+                new Vector3(2.2f, 0f, 0.58f),
+                new Vector3(0f, 0f, 1f),
+                new Vector3(-2.2f, 0f, 0.58f),
+                new Vector3(-0.5f, 0f, 0.58f)
+            },
+            triangles = new[]
+            {
+                0, 6, 1,
+                1, 6, 2,
+                5, 4, 3
+            }
+        };
+        headingArrowMesh.RecalculateNormals();
+        headingArrowMesh.RecalculateBounds();
+        return headingArrowMesh;
+    }
+
+    private Vector3 GetWorldHeadingDirection(PlayerTeam team, float heading)
+    {
+        Vector3 teamForward = team == PlayerTeam.Black
+            ? -BoardForward
+            : BoardForward;
+        return (Quaternion.AngleAxis(heading, BoardUp) * teamForward).normalized;
+    }
+
+    private Material GetHeadingArrowMaterial(PlayerTeam team)
+    {
+        Material material = team == PlayerTeam.White
+            ? whiteHeadingArrowMaterial
+            : blackHeadingArrowMaterial;
+
+        if (material != null)
+        {
+            return material;
+        }
+
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ??
+                        Shader.Find("Sprites/Default") ??
+                        Shader.Find("Unlit/Color");
+
+        if (shader == null)
+        {
+            return null;
+        }
+
+        Color color = team == PlayerTeam.White
+            ? whiteHeadingArrowColor
+            : blackHeadingArrowColor;
+        material = new Material(shader)
+        {
+            name = $"{team} Heading Arrow Material",
+            color = color
+        };
+
+        if (team == PlayerTeam.White)
+        {
+            whiteHeadingArrowMaterial = material;
+        }
+        else
+        {
+            blackHeadingArrowMaterial = material;
+        }
+
+        return material;
     }
 
     private static bool TryGetVisualBounds(
@@ -1036,6 +1270,21 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         {
             Destroy(voiceCommandMaterial);
         }
+
+        if (whiteHeadingArrowMaterial != null)
+        {
+            Destroy(whiteHeadingArrowMaterial);
+        }
+
+        if (blackHeadingArrowMaterial != null)
+        {
+            Destroy(blackHeadingArrowMaterial);
+        }
+
+        if (headingArrowMesh != null)
+        {
+            Destroy(headingArrowMesh);
+        }
     }
 
     private void SpawnSide(
@@ -1162,5 +1411,17 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         ringOutDropDistance = Mathf.Max(0.1f, ringOutDropDistance);
         ringOutTiltAngle = Mathf.Clamp(ringOutTiltAngle, 0f, 120f);
         selectionMarkerSegments = Mathf.Clamp(selectionMarkerSegments, 16, 96);
+        headingArrowLengthInSquares = Mathf.Clamp(
+            headingArrowLengthInSquares,
+            0.3f,
+            1f);
+        headingArrowWidthInSquares = Mathf.Clamp(
+            headingArrowWidthInSquares,
+            0.02f,
+            0.15f);
+        headingArrowHeightInSquares = Mathf.Clamp(
+            headingArrowHeightInSquares,
+            0.005f,
+            0.1f);
     }
 }

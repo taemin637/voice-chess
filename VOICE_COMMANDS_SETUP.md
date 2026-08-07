@@ -54,8 +54,9 @@ subscription key inside a player build.
 - `앞으로 이동`, `앞으로 가`, `계속 앞으로`, `전진`
 - `뒤로 이동`, `뒤로 가`, `계속 뒤로`, `후진`
 - `즉시 멈춰`, `멈춰`, `정지`, `이동 중지`
-- `왼쪽 회전`, `왼쪽으로 돌아`, `좌회전`
-- `오른쪽 회전`, `오른쪽으로 돌아`, `옆으로 돌아`, `우회전`
+- `왼쪽으로 가` (현재 앞방향의 왼쪽 90도로 이동), `왼쪽 회전`, `왼쪽으로 돌아`, `좌회전`
+- `오른쪽으로 가` (현재 앞방향의 오른쪽 90도로 이동), `오른쪽 회전`, `오른쪽으로 돌아`, `옆으로 돌아`, `우회전`
+- `오른쪽 위로 가`, `왼쪽 위로 가`, `오른쪽 아래로 가`, `왼쪽 아래로 가` (모두 현재 앞방향 기준 대각선 이동)
 
 Only a final Azure N-best candidate that maps to this closed command set and
 has at least 0.55 confidence is executed. Other speech is shown but rejected.
@@ -66,6 +67,9 @@ pieces, but enemy pieces block the player. Knockback only occurs when a moving
 enemy piece hits the player along its direction of travel; walking into a still
 piece or into the side of a moving piece does not cause a bounce. The piece keeps
 almost all of its existing momentum while the lighter player takes the impact.
-The intentionally directionless `옆으로 돌아` phrase starts continuous
-clockwise/right rotation so that its behavior is deterministic. Movement and
-rotation commands remain active together until `멈춰` is recognized.
+Every piece owns a heading initialized to its team's forward direction. Rotation
+commands change that heading, while movement commands use an offset relative to
+the current heading without changing it. A colored arrow beneath each piece shows
+its current heading. The intentionally directionless `옆으로 돌아` phrase starts
+continuous clockwise/right rotation so that its behavior is deterministic.
+Movement and rotation commands remain active together until `멈춰` is recognized.
