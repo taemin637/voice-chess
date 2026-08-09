@@ -12,6 +12,10 @@
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
 
+# Local Azure Speech build credentials (intentionally bundled, never committed)
+/Assets/StreamingAssets/azure-speech.json
+/Assets/StreamingAssets/azure-speech.json.meta
+
 # Asset meta data should only be ignored when the corresponding asset is also ignored
 !/[Aa]ssets/**/.meta
 

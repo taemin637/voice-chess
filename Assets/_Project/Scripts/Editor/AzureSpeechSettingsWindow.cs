@@ -31,6 +31,10 @@ public sealed class AzureSpeechSettingsWindow : EditorWindow
         EditorGUILayout.HelpBox(
             "값은 프로젝트나 씬에 저장되지 않고 이 컴퓨터의 Unity EditorPrefs에만 저장됩니다.",
             MessageType.Info);
+        EditorGUILayout.HelpBox(
+            "Windows 빌드 시 저장된 키와 리전이 빌드 폴더의 JSON에 포함됩니다. " +
+            "배포받은 사용자가 키를 추출할 수 있다는 전제로 사용하세요.",
+            MessageType.Warning);
 
         _subscriptionKey = EditorGUILayout.PasswordField(
             "Speech resource key",

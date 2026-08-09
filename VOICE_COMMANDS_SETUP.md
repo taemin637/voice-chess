@@ -40,7 +40,18 @@ The editor stores the credential only in the local Unity `EditorPrefs` store.
 
 ## Player build setup
 
-Set these environment variables before starting the Windows player:
+Before building, save the key and region in **Voice Chess > Azure Speech
+Settings**. The Windows x64 build pipeline writes them to
+`VoiceChess_Data/StreamingAssets/azure-speech.json`, and the player loads that
+file automatically. Recipients can start `VoiceChess.exe` without setting
+environment variables.
+
+The generated JSON is intentionally excluded from Git, but it is distributed
+with the player and can be read by anyone who receives the build. Use a
+dedicated Speech resource whose key can be rotated or deleted independently.
+
+These environment variables remain supported and override the bundled JSON
+when they are present:
 
 - `AZURE_SPEECH_KEY`
 - `AZURE_SPEECH_REGION`

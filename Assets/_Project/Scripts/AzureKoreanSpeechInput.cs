@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.CognitiveServices.Speech;
@@ -24,6 +25,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 {
     private const string SpeechKeyVariable = "AZURE_SPEECH_KEY";
     private const string SpeechRegionVariable = "AZURE_SPEECH_REGION";
+    private const string BuildCredentialsFileName = "azure-speech.json";
     private const string EditorSpeechKeyPreference = "VoiceChess.AzureSpeech.Key";
     private const string EditorSpeechRegionPreference = "VoiceChess.AzureSpeech.Region";
     private const string SelectedMicrophonePreference = "VoiceChess.SelectedMicrophone";
@@ -103,6 +105,17 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private bool _automaticStopRequested;
     private bool _currentRecognitionIsAutomatic;
     private bool _currentRecognitionExecutesCommand;
+
+    private static bool _buildCredentialsLoaded;
+    private static string _buildSpeechKey = string.Empty;
+    private static string _buildSpeechRegion = string.Empty;
+
+    [Serializable]
+    private sealed class BuildSpeechCredentials
+    {
+        public string key = string.Empty;
+        public string region = string.Empty;
+    }
 
     private readonly struct LoudnessFrame
     {
@@ -1717,8 +1730,67 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         {
             region = EditorPrefs.GetString(EditorSpeechRegionPreference, string.Empty);
         }
+#elif UNITY_STANDALONE_WIN
+        if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(region))
+        {
+            LoadBuildCredentials();
+
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                key = _buildSpeechKey;
+            }
+
+            if (string.IsNullOrWhiteSpace(region))
+            {
+                region = _buildSpeechRegion;
+            }
+        }
 #endif
     }
+
+#if UNITY_STANDALONE_WIN && !UNITY_EDITOR
+    private static void LoadBuildCredentials()
+    {
+        if (_buildCredentialsLoaded)
+        {
+            return;
+        }
+
+        _buildCredentialsLoaded = true;
+
+        try
+        {
+            string credentialsPath = Path.Combine(
+                Application.streamingAssetsPath,
+                BuildCredentialsFileName);
+
+            if (!File.Exists(credentialsPath))
+            {
+                Debug.LogError(
+                    $"Azure Speech build credentials were not found: {credentialsPath}");
+                return;
+            }
+
+            string json = File.ReadAllText(credentialsPath);
+            BuildSpeechCredentials credentials =
+                JsonUtility.FromJson<BuildSpeechCredentials>(json);
+
+            if (credentials == null)
+            {
+                Debug.LogError("Azure Speech build credentials JSON is invalid.");
+                return;
+            }
+
+            _buildSpeechKey = credentials.key?.Trim() ?? string.Empty;
+            _buildSpeechRegion = credentials.region?.Trim() ?? string.Empty;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError(
+                $"Failed to load Azure Speech build credentials: {exception.Message}");
+        }
+    }
+#endif
 
     private void OnDestroy()
     {
