@@ -106,10 +106,14 @@ public sealed class SessionManager : MonoBehaviour
             NetworkChessGame chessGame = ResolveChessGame();
 
             if (chessGame != null &&
-                chessGame.Winner != PlayerTeam.Unassigned &&
+                chessGame.IsGameOver &&
                 chessGame.IsGameOverPresentationReady)
             {
-                DrawGameOverOverlay(chessGame.Winner);
+                DrawGameOverOverlay(chessGame);
+            }
+            else if (chessGame != null && !chessGame.IsGameOver)
+            {
+                DrawMatchTimer(chessGame.RemainingTime);
             }
 
             return;
@@ -145,7 +149,30 @@ public sealed class SessionManager : MonoBehaviour
         GUI.matrix = previousMatrix;
     }
 
-    private void DrawGameOverOverlay(PlayerTeam winner)
+    private void DrawMatchTimer(float remainingTime)
+    {
+        Matrix4x4 previousMatrix = GUI.matrix;
+        float scale = Mathf.Min(Screen.width / DesignWidth, Screen.height / DesignHeight);
+        float offsetX = (Screen.width - DesignWidth * scale) * 0.5f;
+        float offsetY = (Screen.height - DesignHeight * scale) * 0.5f;
+
+        GUI.matrix = Matrix4x4.TRS(
+            new Vector3(offsetX, offsetY, 0f),
+            Quaternion.identity,
+            new Vector3(scale, scale, 1f));
+
+        int seconds = Mathf.CeilToInt(remainingTime);
+        Rect timerPanel = new(675f, 30f, 250f, 78f);
+        DrawShadowedPanel(timerPanel, _panel);
+        GUI.Label(
+            timerPanel,
+            $"{seconds / 60:00}:{seconds % 60:00}",
+            _heroTitle);
+
+        GUI.matrix = previousMatrix;
+    }
+
+    private void DrawGameOverOverlay(NetworkChessGame chessGame)
     {
         DrawFullScreenBackground();
 
@@ -159,12 +186,28 @@ public sealed class SessionManager : MonoBehaviour
             Quaternion.identity,
             new Vector3(scale, scale, 1f));
 
-        Rect panel = new(420f, 205f, 760f, 490f);
+        Rect panel = new(420f, 165f, 760f, 570f);
         DrawShadowedPanel(panel, _panel);
+        PlayerTeam winner = chessGame.Winner;
         GUI.Label(
-            new Rect(480f, 300f, 640f, 70f),
-            $"{winner.ToString().ToUpperInvariant()} TEAM WINS",
+            new Rect(480f, 235f, 640f, 70f),
+            winner == PlayerTeam.Unassigned
+                ? "DRAW"
+                : $"{winner.ToString().ToUpperInvariant()} TEAM WINS",
             _heroTitle);
+
+        int whiteRemaining = chessGame.GetRemainingPieceCount(PlayerTeam.White);
+        int blackRemaining = chessGame.GetRemainingPieceCount(PlayerTeam.Black);
+        int whiteKills = chessGame.GetKilledPieceCount(PlayerTeam.White);
+        int blackKills = chessGame.GetKilledPieceCount(PlayerTeam.Black);
+        GUI.Label(
+            new Rect(480f, 315f, 640f, 38f),
+            $"WHITE  |  REMAINING {whiteRemaining}  |  KILLED {whiteKills}",
+            _subtitle);
+        GUI.Label(
+            new Rect(480f, 355f, 640f, 38f),
+            $"BLACK  |  REMAINING {blackRemaining}  |  KILLED {blackKills}",
+            _subtitle);
 
         NetworkPlayer localPlayer = NetworkPlayer.LocalPlayer;
         bool isHost = localPlayer != null && localPlayer.IsServer;
@@ -172,7 +215,7 @@ public sealed class SessionManager : MonoBehaviour
         if (isHost)
         {
             if (DrawButton(
-                    new Rect(500f, 420f, 600f, 76f),
+                    new Rect(500f, 445f, 600f, 76f),
                     "PLAY AGAIN",
                     _accentButton))
             {
@@ -180,7 +223,7 @@ public sealed class SessionManager : MonoBehaviour
             }
 
             if (DrawButton(
-                    new Rect(500f, 520f, 600f, 76f),
+                    new Rect(500f, 545f, 600f, 76f),
                     "RETURN TO LOBBY",
                     _secondaryButton))
             {
@@ -192,7 +235,7 @@ public sealed class SessionManager : MonoBehaviour
         else
         {
             GUI.Label(
-                new Rect(480f, 465f, 640f, 80f),
+                new Rect(480f, 475f, 640f, 80f),
                 "Waiting for the host to choose the next round.",
                 _subtitle);
         }
@@ -204,7 +247,7 @@ public sealed class SessionManager : MonoBehaviour
     {
         NetworkChessGame chessGame = ResolveChessGame();
         return chessGame != null &&
-               chessGame.Winner != PlayerTeam.Unassigned;
+               chessGame.IsGameOver;
     }
 
     private NetworkChessGame ResolveChessGame()

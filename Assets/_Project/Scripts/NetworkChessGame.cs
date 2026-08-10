@@ -93,6 +93,8 @@ public struct NetworkChessPieceState :
 [DisallowMultipleComponent]
 public sealed class NetworkChessGame : NetworkBehaviour
 {
+    private const int StartingPiecesPerTeam = 16;
+
     private readonly struct LocalVoiceGazeSample
     {
         public readonly float Time;
@@ -111,6 +113,9 @@ public sealed class NetworkChessGame : NetworkBehaviour
     }
 
     [SerializeField] private ChessPieceSpawner pieceSpawner;
+
+    [Header("Match Rules")]
+    [SerializeField, Min(1f)] private float matchDurationSeconds = 60f;
 
     [Header("Voice Free Movement")]
     [SerializeField, Min(0.05f)] private float voiceMoveSpeed = 0.85f;
@@ -154,6 +159,21 @@ public sealed class NetworkChessGame : NetworkBehaviour
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    private readonly NetworkVariable<bool> _isGameOver = new(
+        false,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
+    private readonly NetworkVariable<bool> _matchTimerRunning = new(
+        false,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
+    private readonly NetworkVariable<double> _matchEndServerTime = new(
+        0d,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     private readonly NetworkVariable<bool> _gameOverPresentationReady = new(
         true,
         NetworkVariableReadPermission.Everyone,
@@ -177,7 +197,23 @@ public sealed class NetworkChessGame : NetworkBehaviour
     private Quaternion _kingDeathCameraStartRotation;
 
     public PlayerTeam Winner => _winner.Value;
+    public bool IsGameOver => _isGameOver.Value;
     public bool IsGameOverPresentationReady => _gameOverPresentationReady.Value;
+    public float MatchDurationSeconds => matchDurationSeconds;
+    public float RemainingTime
+    {
+        get
+        {
+            if (!_matchTimerRunning.Value || NetworkManager == null)
+            {
+                return _isGameOver.Value ? 0f : matchDurationSeconds;
+            }
+
+            return Mathf.Max(
+                0f,
+                (float)(_matchEndServerTime.Value - NetworkManager.ServerTime.Time));
+        }
+    }
 
     public bool HasLocalVoiceSelection =>
         _localVoiceTargetPieceId >= 0 &&
@@ -187,7 +223,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
     {
         if (IsServer && _pieces.Count == 0)
         {
-            InitializePieces();
+            InitializePieces(startMatchTimer: false);
         }
 
         if (pieceSpawner == null)
@@ -196,14 +232,14 @@ public sealed class NetworkChessGame : NetworkBehaviour
         }
 
         _pieces.OnListChanged += HandlePiecesChanged;
-        _winner.OnValueChanged += HandleWinnerChanged;
+        _isGameOver.OnValueChanged += HandleGameOverChanged;
         _visualRefreshPending = true;
     }
 
     public override void OnNetworkDespawn()
     {
         _pieces.OnListChanged -= HandlePiecesChanged;
-        _winner.OnValueChanged -= HandleWinnerChanged;
+        _isGameOver.OnValueChanged -= HandleGameOverChanged;
         CleanupKingDeathCinematic();
         ClearLocalVoiceTarget();
     }
@@ -219,13 +255,26 @@ public sealed class NetworkChessGame : NetworkBehaviour
             return false;
         }
 
-        InitializePieces();
+        InitializePieces(startMatchTimer: true);
         return true;
     }
 
     private void FixedUpdate()
     {
-        if (!IsSpawned || !IsServer || _winner.Value != PlayerTeam.Unassigned)
+        if (!IsSpawned || !IsServer)
+        {
+            return;
+        }
+
+        if (!_isGameOver.Value &&
+            _matchTimerRunning.Value &&
+            NetworkPlayer.MatchStarted &&
+            NetworkManager.ServerTime.Time >= _matchEndServerTime.Value)
+        {
+            FinishMatchByPieceCount();
+        }
+
+        if (_isGameOver.Value)
         {
             return;
         }
@@ -299,8 +348,9 @@ public sealed class NetworkChessGame : NetworkBehaviour
         UpdateKingDeathCinematic();
     }
 
-    private void InitializePieces()
+    private void InitializePieces(bool startMatchTimer)
     {
+        _matchTimerRunning.Value = false;
         _pieces.Clear();
         ushort nextId = 0;
         ChessPieceType[] backRank =
@@ -329,6 +379,14 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
         _gameOverPresentationReady.Value = true;
         _winner.Value = PlayerTeam.Unassigned;
+        _isGameOver.Value = false;
+
+        if (startMatchTimer)
+        {
+            _matchEndServerTime.Value =
+                NetworkManager.ServerTime.Time + matchDurationSeconds;
+            _matchTimerRunning.Value = true;
+        }
     }
 
     private void HandlePiecesChanged(
@@ -337,16 +395,57 @@ public sealed class NetworkChessGame : NetworkBehaviour
         _visualRefreshPending = true;
     }
 
-    private void HandleWinnerChanged(
-        PlayerTeam previousWinner,
-        PlayerTeam newWinner)
+    private void HandleGameOverChanged(bool wasGameOver, bool isGameOver)
     {
-        if (previousWinner != PlayerTeam.Unassigned &&
-            newWinner == PlayerTeam.Unassigned)
+        if (wasGameOver && !isGameOver)
         {
             CleanupKingDeathCinematic();
             ClearLocalVoiceTarget();
         }
+    }
+
+    public int GetRemainingPieceCount(PlayerTeam team)
+    {
+        int count = 0;
+
+        for (int index = 0; index < _pieces.Count; index++)
+        {
+            if (_pieces[index].OwnerTeam == team)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    public int GetKilledPieceCount(PlayerTeam team)
+    {
+        PlayerTeam opponent = GetOpponent(team);
+        return Mathf.Max(
+            0,
+            StartingPiecesPerTeam - GetRemainingPieceCount(opponent));
+    }
+
+    private void FinishMatchByPieceCount()
+    {
+        int whiteKills = GetKilledPieceCount(PlayerTeam.White);
+        int blackKills = GetKilledPieceCount(PlayerTeam.Black);
+        PlayerTeam winner = PlayerTeam.Unassigned;
+
+        if (whiteKills > blackKills)
+        {
+            winner = PlayerTeam.White;
+        }
+        else if (blackKills > whiteKills)
+        {
+            winner = PlayerTeam.Black;
+        }
+
+        _matchTimerRunning.Value = false;
+        _winner.Value = winner;
+        _isGameOver.Value = true;
+        _gameOverPresentationReady.Value = true;
     }
 
     private Vector2 GetCommandedVelocity(NetworkChessPieceState piece)
@@ -483,11 +582,13 @@ public sealed class NetworkChessGame : NetworkBehaviour
     private void HandleRingOut(NetworkChessPieceState piece)
     {
         if (piece.PieceType == ChessPieceType.King &&
-            _winner.Value == PlayerTeam.Unassigned)
+            !_isGameOver.Value)
         {
             _gameOverPresentationReady.Value = false;
             BeginKingDeathCinematicRpc(piece);
+            _matchTimerRunning.Value = false;
             _winner.Value = GetOpponent(piece.OwnerTeam);
+            _isGameOver.Value = true;
         }
     }
 
@@ -980,7 +1081,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
         }
 
         if (command != PieceVoiceCommand.Stop &&
-            _winner.Value != PlayerTeam.Unassigned)
+            _isGameOver.Value)
         {
             rejection = "게임이 이미 끝났습니다.";
             return false;
@@ -1032,7 +1133,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
         if (piece.OwnerTeam != player.Team ||
             (command != PieceVoiceCommand.Stop &&
-             _winner.Value != PlayerTeam.Unassigned))
+             _isGameOver.Value))
         {
             return;
         }
@@ -1165,6 +1266,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
     private void OnValidate()
     {
+        matchDurationSeconds = Mathf.Max(1f, matchDurationSeconds);
         voiceMoveSpeed = Mathf.Max(0.05f, voiceMoveSpeed);
         voiceTurnSpeed = Mathf.Max(5f, voiceTurnSpeed);
         quietVoiceSpeedMultiplier = Mathf.Clamp(
