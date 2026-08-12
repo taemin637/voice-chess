@@ -61,8 +61,8 @@ public sealed class AzureSpeechBuildCredentialsExporter :
             ImportAssetOptions.ForceSynchronousImport |
             ImportAssetOptions.ForceUpdate);
 
-        Debug.Log(
-            "Azure Speech credentials are ready to be included in StreamingAssets.");
+        // Debug.Log(
+        //     "Azure Speech credentials are ready to be included in StreamingAssets.");
     }
 
     private static void GetSavedCredentials(out string key, out string region)

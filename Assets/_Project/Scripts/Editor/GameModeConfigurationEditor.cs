@@ -63,10 +63,14 @@ public sealed class GameModeConfigurationEditor : Editor
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("플레이어와 화면", EditorStyles.boldLabel);
-        DrawProperty("players", "플레이어 조작 · 입력 키");
+        DrawProperty("players", "플레이어 킹 · 시작 위치 · 시점 · 입력 키");
         DrawProperty("voiceRecognition", "음성 인식");
         DrawProperty("interfaceAndSession", "UI · 세션");
         DrawProperty("presentation", "게임 종료 연출");
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("에디터 테스트", EditorStyles.boldLabel);
+        DrawProperty("editorSoloTest", "1인 자동 플레이 테스트");
         serializedObject.ApplyModifiedProperties();
 
         GameModeConfiguration configuration = (GameModeConfiguration)target;

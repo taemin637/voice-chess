@@ -103,6 +103,46 @@ public sealed partial class NetworkChessGame
         0f,
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<bool> _randomCaptureRoundActive = new(
+        false,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<float> _randomCaptureZoneFile = new(
+        3.5f,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<float> _randomCaptureZoneRank = new(
+        3.5f,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<float> _randomCaptureZoneRadius = new(
+        1f,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<double> _randomCaptureRoundStartServerTime = new(
+        0d,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<double> _randomCaptureRoundEndServerTime = new(
+        0d,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<double> _randomCaptureNextRoundServerTime = new(
+        0d,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<uint> _randomCaptureRoundNumber = new(
+        0u,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<double> _whiteBoardKingRespawnEndServerTime = new(
+        0d,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<double> _blackBoardKingRespawnEndServerTime = new(
+        0d,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
     private readonly NetworkVariable<MatchEndReason> _matchEndReason = new(
         MatchEndReason.None,
         NetworkVariableReadPermission.Everyone,
@@ -125,6 +165,9 @@ public sealed partial class NetworkChessGame
     public VoiceCommandVersion ActiveVoiceCommandVersion => gameMode != null
         ? gameMode.Commands.VoiceCommandVersion
         : VoiceCommandVersion.LegacyLookSelection;
+    public CostConsumptionVersion ActiveCostConsumptionVersion => gameMode != null
+        ? gameMode.Commands.CostConsumptionVersion
+        : CostConsumptionVersion.FixedPerCommand;
     public bool IsCostSystemEnabled => gameMode != null &&
         gameMode.Commands.CostSystemEnabled;
     public float MaximumCommandCost => gameMode != null
@@ -135,6 +178,42 @@ public sealed partial class NetworkChessGame
     public MatchEndReason EndReason => _matchEndReason.Value;
     public float WhiteCaptureScore => _whiteCaptureScore.Value;
     public float BlackCaptureScore => _blackCaptureScore.Value;
+    public bool IsRandomCaptureRoundActive =>
+        _randomCaptureRoundActive.Value;
+    public Vector2 RandomCaptureZoneBoardPosition => new(
+        _randomCaptureZoneFile.Value,
+        _randomCaptureZoneRank.Value);
+    public float RandomCaptureZoneRadius => _randomCaptureZoneRadius.Value;
+    public uint RandomCaptureRoundNumber => _randomCaptureRoundNumber.Value;
+    public float RandomCaptureRoundProgress
+    {
+        get
+        {
+            if (!_randomCaptureRoundActive.Value || NetworkManager == null)
+            {
+                return 0f;
+            }
+
+            double duration = _randomCaptureRoundEndServerTime.Value -
+                _randomCaptureRoundStartServerTime.Value;
+
+            if (duration <= 0d)
+            {
+                return 1f;
+            }
+
+            return Mathf.Clamp01((float)(
+                (NetworkManager.ServerTime.Time -
+                 _randomCaptureRoundStartServerTime.Value) / duration));
+        }
+    }
+    public float RemainingRandomCaptureRoundTime =>
+        !_randomCaptureRoundActive.Value || NetworkManager == null
+            ? 0f
+            : Mathf.Max(
+                0f,
+                (float)(_randomCaptureRoundEndServerTime.Value -
+                    NetworkManager.ServerTime.Time));
     public NetworkList<CaptureZoneNetworkState> CaptureZoneStates => _captureZoneStates;
     public float RemainingTurnTime
     {
@@ -162,6 +241,20 @@ public sealed partial class NetworkChessGame
             PlayerTeam.Black => _blackCommandPoints.Value,
             _ => 0f
         };
+    }
+
+    public float GetDisplayedCommandPoints(PlayerTeam team)
+    {
+        float points = GetCommandPoints(team);
+
+        if (_localVoiceChargePreviewCost <= 0f ||
+            !TryGetLocalPlayer(out NetworkPlayer localPlayer) ||
+            localPlayer.Team != team)
+        {
+            return points;
+        }
+
+        return Mathf.Max(0f, points - _localVoiceChargePreviewCost);
     }
 
     public float GetCaptureScore(PlayerTeam team)
@@ -228,6 +321,7 @@ public sealed partial class NetworkChessGame
         {
             if (placement == null ||
                 !placement.Enabled ||
+                !gameMode.ShouldSpawnBoardPiece(placement) ||
                 placement.PieceType == ChessPieceType.None ||
                 (placement.Team != PlayerTeam.White &&
                  placement.Team != PlayerTeam.Black))
@@ -283,6 +377,7 @@ public sealed partial class NetworkChessGame
         _whiteCaptureScore.Value = 0f;
         _blackCaptureScore.Value = 0f;
         InitializeCaptureZones();
+        InitializeCaptureKingRespawns();
         InitializeCommandEconomy();
 
         foreach (NetworkPlayer player in NetworkPlayer.Players)
@@ -326,6 +421,7 @@ public sealed partial class NetworkChessGame
 
         UpdateCommandEconomy(deltaTime);
         UpdateCaptureZones(deltaTime);
+        UpdateCaptureKingRespawns();
         EvaluateConfiguredVictory();
 
         if (!_isGameOver.Value &&
@@ -384,8 +480,29 @@ public sealed partial class NetworkChessGame
 
         VictorySettings victory = gameMode.Victory;
 
+        if (IsCaptureModeEnabled &&
+            gameMode.CaptureMode.Version ==
+            CaptureModeVersion.RandomRoundControl)
+        {
+            float target = gameMode.CaptureMode.RandomRoundScoreToWin;
+            bool whiteReached = _whiteCaptureScore.Value >= target;
+            bool blackReached = _blackCaptureScore.Value >= target;
+
+            if (whiteReached || blackReached)
+            {
+                EndMatch(
+                    whiteReached == blackReached
+                        ? PlayerTeam.Unassigned
+                        : whiteReached ? PlayerTeam.White : PlayerTeam.Black,
+                    MatchEndReason.CaptureScoreReached);
+                return;
+            }
+        }
+
         if (victory.EndAtCaptureScore &&
             IsCaptureModeEnabled &&
+            gameMode.CaptureMode.Version ==
+            CaptureModeVersion.LegacyConfiguredZones &&
             gameMode.CaptureMode.ScoringRule == CaptureScoringRule.PeriodicPerPiece)
         {
             bool whiteReached = _whiteCaptureScore.Value >= victory.CaptureScoreToWin;
@@ -419,6 +536,11 @@ public sealed partial class NetworkChessGame
         }
 
         if (!victory.EndWhenRoyalEliminated)
+        {
+            return;
+        }
+
+        if (IsCaptureKingRespawnEnabled)
         {
             return;
         }
@@ -493,12 +615,20 @@ public sealed partial class NetworkChessGame
             }
         }
 
+#if UNITY_EDITOR
+        if (EditorSoloPlayTester.HasLivingDummyPlayer(team))
+        {
+            total++;
+        }
+#endif
+
         anyEliminated = eliminated > 0;
         allEliminated = total == 0 || eliminated == total;
     }
 
     private void FinishMatchAtTimeLimit()
     {
+        RefreshFinalOccupancyScores();
         bool captureResolvesTimeLimit = IsCaptureModeEnabled &&
             gameMode.CaptureMode.ResolveWinnerAtTimeLimit;
         TimeLimitResolution resolution = captureResolvesTimeLimit
@@ -565,6 +695,13 @@ public sealed partial class NetworkChessGame
 
     private void HandleConfiguredPieceRingOut(NetworkChessPieceState piece)
     {
+        if (piece.PieceType == ChessPieceType.King &&
+            IsCaptureKingRespawnEnabled)
+        {
+            ScheduleBoardKingRespawn(piece);
+            return;
+        }
+
         if (gameMode == null)
         {
             if (piece.PieceType == ChessPieceType.King)
@@ -604,7 +741,8 @@ public sealed partial class NetworkChessGame
         PlayerTeam team,
         ChessPieceType pieceType,
         PieceVoiceCommand command,
-        out string rejection)
+        out string rejection,
+        float voicedDurationSeconds = -1f)
     {
         rejection = string.Empty;
         PieceArchetypeSettings pieceSettings = GetPieceSettings(pieceType);
@@ -668,7 +806,10 @@ public sealed partial class NetworkChessGame
 
         if (economy.CostSystemEnabled)
         {
-            float cost = GetCommandCost(pieceSettings, command);
+            float cost = GetCommandCost(
+                pieceSettings,
+                command,
+                voicedDurationSeconds);
 
             if (GetCommandPoints(team) + 0.0001f < cost)
             {
@@ -751,6 +892,7 @@ public sealed partial class NetworkChessGame
     {
         piece.VoiceMoveHeadingOffset = headingOffset;
         piece.VoiceMoveLoudness = commandLoudness;
+        piece.VoiceChargeDistanceRemaining = 0f;
 
         if (settings.MovementControl == PieceMovementControl.Continuous)
         {
@@ -776,6 +918,75 @@ public sealed partial class NetworkChessGame
         piece.KnockbackRankVelocity = newVelocity.y;
     }
 
+    private void ApplyVoiceChargedMovement(
+        ref NetworkChessPieceState piece,
+        PieceArchetypeSettings settings,
+        float chargePower,
+        float chargeDistance)
+    {
+        piece.VoiceMoveHeadingOffset = 0f;
+        piece.VoiceMoveLoudness = Mathf.Clamp01(chargePower);
+        piece.VoiceChargeDistanceRemaining = Mathf.Max(0f, chargeDistance);
+
+        if (settings.MovementControl == PieceMovementControl.Continuous)
+        {
+            piece.VoiceMoveAxis = chargeDistance > 0f ? (sbyte)1 : (sbyte)0;
+            return;
+        }
+
+        piece.VoiceMoveAxis = 0;
+        Vector2 direction = GetVoiceMoveDirection(
+            piece.OwnerTeam,
+            piece.VoiceHeading);
+        float launchSpeed = settings.FlickFriction > 0.0001f
+            ? Mathf.Sqrt(2f * settings.FlickFriction * Mathf.Max(0f, chargeDistance))
+            : settings.GetFlickSpeed(chargePower);
+        launchSpeed = Mathf.Min(launchSpeed, settings.MaximumFlickSpeed);
+        Vector2 velocity = direction * launchSpeed;
+        piece.KnockbackFileVelocity = velocity.x;
+        piece.KnockbackRankVelocity = velocity.y;
+    }
+
+    public float GetVoiceChargeCost(
+        ChessPieceType pieceType,
+        float voicedDurationSeconds,
+        int selectedPieceCount = 1)
+    {
+        PieceArchetypeSettings pieceSettings = GetPieceSettings(pieceType);
+        float baseCost = gameMode == null
+            ? 0f
+            : gameMode.Commands.UsesVoiceDurationCost
+                ? gameMode.Commands.GetVoiceChargeCost(
+                    voicedDurationSeconds,
+                    selectedPieceCount)
+                : gameMode.Commands.GetBaseCost(PieceVoiceCommand.Charge);
+        return Mathf.Max(1f, baseCost * pieceSettings.CommandCostMultiplier);
+    }
+
+    public float GetVoiceChargeDistance(
+        ChessPieceType pieceType,
+        float chargePower)
+    {
+        if (gameMode == null)
+        {
+            return 0f;
+        }
+
+        PieceArchetypeSettings settings = GetPieceSettings(pieceType);
+        float distance = gameMode.Commands.GetVoiceChargeDistance(chargePower);
+
+        if (settings.MovementControl == PieceMovementControl.FlickImpulse &&
+            settings.FlickFriction > 0.0001f)
+        {
+            float maximumPhysicalDistance =
+                settings.MaximumFlickSpeed * settings.MaximumFlickSpeed /
+                (2f * settings.FlickFriction);
+            distance = Mathf.Min(distance, maximumPhysicalDistance);
+        }
+
+        return Mathf.Max(0f, distance);
+    }
+
     private static Vector2 DeceleratePhysicalVelocity(
         PieceArchetypeSettings settings,
         Vector2 velocity,
@@ -794,15 +1005,23 @@ public sealed partial class NetworkChessGame
 
     private float GetCommandCost(
         PieceArchetypeSettings pieceSettings,
-        PieceVoiceCommand command)
+        PieceVoiceCommand command,
+        float voicedDurationSeconds = -1f)
     {
         if (gameMode == null)
         {
             return 0f;
         }
 
-        float cost = gameMode.Commands.GetBaseCost(command) *
-            pieceSettings.CommandCostMultiplier;
+        CommandEconomySettings economy = gameMode.Commands;
+        float baseCost = command == PieceVoiceCommand.Charge &&
+            economy.UsesVoiceDurationCost
+            ? economy.GetVoiceChargeCost(
+                voicedDurationSeconds >= 0f
+                    ? Mathf.Max(0.0001f, voicedDurationSeconds)
+                    : economy.VoiceChargeSecondsPerCostStep)
+            : economy.GetBaseCost(command);
+        float cost = baseCost * pieceSettings.CommandCostMultiplier;
         ChessPieceAbility ability = FindAbility(pieceSettings, command);
 
         if (ability != null)
@@ -810,13 +1029,16 @@ public sealed partial class NetworkChessGame
             cost += ability.AdditionalCommandCost;
         }
 
-        return Mathf.Max(0f, cost);
+        return command == PieceVoiceCommand.Charge
+            ? Mathf.Max(1f, cost)
+            : Mathf.Max(0f, cost);
     }
 
     private void AcceptCommand(
         PlayerTeam team,
         PieceArchetypeSettings pieceSettings,
-        PieceVoiceCommand command)
+        PieceVoiceCommand command,
+        float acceptedCost = -1f)
     {
         if (gameMode == null)
         {
@@ -827,7 +1049,9 @@ public sealed partial class NetworkChessGame
 
         if (economy.CostSystemEnabled)
         {
-            float cost = GetCommandCost(pieceSettings, command);
+            float cost = acceptedCost >= 0f
+                ? acceptedCost
+                : GetCommandCost(pieceSettings, command);
 
             if (team == PlayerTeam.White)
             {
@@ -892,6 +1116,37 @@ public sealed partial class NetworkChessGame
         _turnNumber.Value++;
         ResetTurnDeadline();
     }
+
+#if UNITY_EDITOR
+    public bool EditorForceAdvanceTurn()
+    {
+        if (!IsSpawned ||
+            !IsServer ||
+            _isGameOver.Value ||
+            !NetworkPlayer.MatchStarted ||
+            CommandMode != CommandIssuingMode.AlternatingTurns)
+        {
+            return false;
+        }
+
+        AdvanceTurn();
+        return true;
+    }
+
+    public bool EditorForceFinishMatchAtTimeLimit()
+    {
+        if (!IsSpawned ||
+            !IsServer ||
+            _isGameOver.Value ||
+            !NetworkPlayer.MatchStarted)
+        {
+            return false;
+        }
+
+        FinishMatchAtTimeLimit();
+        return true;
+    }
+#endif
 
     private void ResetTurnDeadline()
     {

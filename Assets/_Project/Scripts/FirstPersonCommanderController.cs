@@ -33,9 +33,17 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
     private float _heightInSquares;
     private float _verticalVelocity;
     private Vector2 _knockbackVelocity;
+    private Vector2 _fallHorizontalVelocity;
     private NetworkPlayer _localNetworkPlayer;
     private bool _cameraConfigured;
     private bool _isGrounded = true;
+    private bool _matchStartPoseApplied;
+    private bool _wasMatchStarted;
+    private bool _wasGameOver;
+    private bool _isFallingOffBoard;
+    private PlayerTeam _matchStartPoseTeam = PlayerTeam.Unassigned;
+    private GUIStyle _respawnCountdownStyle;
+    private GUIStyle _respawnCountdownShadowStyle;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
@@ -64,14 +72,48 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
             return;
         }
 
+        bool matchStarted = NetworkPlayer.MatchStarted;
+        bool isGameOver = _game.IsGameOver;
+        NetworkPlayer localPlayer = ResolveLocalNetworkPlayer();
+        PlayerTeam localTeam = localPlayer != null
+            ? localPlayer.Team
+            : PlayerTeam.Unassigned;
+        bool roundRestarted = _wasGameOver && !isGameOver;
+
+        if (matchStarted &&
+            (!_matchStartPoseApplied ||
+             !_wasMatchStarted ||
+             roundRestarted ||
+             _matchStartPoseTeam != localTeam))
+        {
+            ApplyMatchStartPose(localPlayer);
+        }
+        else if (!matchStarted)
+        {
+            _matchStartPoseApplied = false;
+            _matchStartPoseTeam = PlayerTeam.Unassigned;
+        }
+
+        bool captureKingRespawning =
+            _game.TryGetLocalCaptureKingRespawnRemaining(out _);
         bool gameplayInputActive =
-            NetworkPlayer.MatchStarted &&
-            (ResolveLocalNetworkPlayer() == null ||
-             !ResolveLocalNetworkPlayer().IsEliminated) &&
+            matchStarted &&
+            !captureKingRespawning &&
+            (localPlayer == null || !localPlayer.IsEliminated) &&
             !SessionManager.IsFrontEndVisible &&
             !InGameVoiceSettingsUI.IsBlockingGameplay;
 
         UpdateCursor(gameplayInputActive);
+
+        if (captureKingRespawning)
+        {
+            UpdateCaptureRespawnCamera();
+            _game.UpdateLocalChargeAim(default, PlayerTeam.Unassigned);
+            _game.UpdateLocalVoiceGazeTarget(null, _file, _rank);
+            _wasMatchStarted = matchStarted;
+            _wasGameOver = isGameOver;
+            return;
+        }
 
         if (gameplayInputActive)
         {
@@ -82,6 +124,8 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         UpdateMovement(gameplayInputActive);
         UpdateCameraTransform();
         UpdateGazeTarget(gameplayInputActive);
+        _wasMatchStarted = matchStarted;
+        _wasGameOver = isGameOver;
     }
 
     private void ResolveReferences()
@@ -116,6 +160,92 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         _rank = 3.5f;
         transform.position = _pieceSpawner.GetBoardWorldPosition(_file, _rank);
         _cameraConfigured = true;
+        UpdateCameraTransform();
+    }
+
+    private void ApplyMatchStartPose(NetworkPlayer localPlayer)
+    {
+        bool usePlayerKing =
+            _game.GameMode?.Victory.UsesPlayerCommander == true;
+        PlayerTeam team = localPlayer != null
+            ? localPlayer.Team
+            : PlayerTeam.Unassigned;
+
+        if (usePlayerKing && team == PlayerTeam.Unassigned)
+        {
+            return;
+        }
+
+        Vector2 start = new(3.5f, 3.5f);
+        float startYaw = 0f;
+        PlayerCommanderSettings settings = _game.GetPlayerSettings();
+
+        if (usePlayerKing)
+        {
+            start = settings?.GetPlayerKingFallbackStart(team) ??
+                (team == PlayerTeam.Black
+                    ? new Vector2(4f, 7f)
+                    : new Vector2(4f, 0f));
+
+            if (settings?.UseBoardKingPlacementAsPlayerStart != false &&
+                _game.GameMode.TryGetConfiguredKingPosition(
+                    team,
+                    out Vector2 configuredKingPosition))
+            {
+                start = configuredKingPosition;
+            }
+
+            startYaw = settings?.GetPlayerKingStartYaw(team) ??
+                (team == PlayerTeam.Black ? 180f : 0f);
+        }
+
+        _file = Mathf.Clamp(
+            start.x,
+            _pieceSpawner.GroundMinimumCoordinate,
+            _pieceSpawner.GroundMaximumCoordinate);
+        _rank = Mathf.Clamp(
+            start.y,
+            _pieceSpawner.GroundMinimumCoordinate,
+            _pieceSpawner.GroundMaximumCoordinate);
+        _yaw = startYaw;
+        _pitch = 0f;
+        _heightInSquares = 0f;
+        _verticalVelocity = 0f;
+        _knockbackVelocity = Vector2.zero;
+        _fallHorizontalVelocity = Vector2.zero;
+        _isGrounded = true;
+        _isFallingOffBoard = false;
+        _eyeHeightWorld = 0f;
+        transform.position = _pieceSpawner.GetBoardWorldPosition(_file, _rank);
+        localPlayer?.SetLocalAvatarPose(_file, _rank, 0f, _yaw);
+        _matchStartPoseApplied = true;
+        _matchStartPoseTeam = team;
+        UpdateCameraTransform();
+    }
+
+    public void ApplyCaptureRespawnPose(Vector2 boardPosition, float yaw)
+    {
+        if (_pieceSpawner == null)
+        {
+            _pieceSpawner = FindFirstObjectByType<ChessPieceSpawner>();
+        }
+
+        if (_pieceSpawner == null)
+        {
+            return;
+        }
+
+        _file = Mathf.Clamp(boardPosition.x, 0f, 7f);
+        _rank = Mathf.Clamp(boardPosition.y, 0f, 7f);
+        _yaw = Mathf.Repeat(yaw, 360f);
+        _pitch = 0f;
+        _heightInSquares = 0f;
+        _verticalVelocity = 0f;
+        _knockbackVelocity = Vector2.zero;
+        _fallHorizontalVelocity = Vector2.zero;
+        _isGrounded = true;
+        _isFallingOffBoard = false;
+        transform.position = _pieceSpawner.GetBoardWorldPosition(_file, _rank);
         UpdateCameraTransform();
     }
 
@@ -201,32 +331,72 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         float deltaTime = Time.deltaTime;
         float knockbackDrag = settings?.KnockbackDrag ?? playerKnockbackDrag;
         _knockbackVelocity *= Mathf.Exp(-knockbackDrag * deltaTime);
-        Vector2 playerVelocity = desiredVelocity + _knockbackVelocity;
+        Vector2 playerVelocity = _isFallingOffBoard
+            ? _fallHorizontalVelocity
+            : desiredVelocity + _knockbackVelocity;
         Vector2 playerPosition = new(_file, _rank);
         playerPosition += playerVelocity * deltaTime;
-
-        UpdateJump(gameplayInputActive, keyboard, deltaTime);
 
         NetworkPlayer localPlayer = ResolveLocalNetworkPlayer();
         PlayerTeam team = localPlayer != null
             ? localPlayer.Team
             : PlayerTeam.Unassigned;
-        _game.ResolvePlayerPieceCollisions(
-            team,
-            _heightInSquares,
-            settings?.CollisionRadiusInSquares ?? collisionRadiusInSquares,
-            ref playerPosition,
-            ref playerVelocity);
-        _knockbackVelocity = playerVelocity - desiredVelocity;
+        bool usePlayerKing =
+            _game?.GameMode?.Victory.UsesPlayerCommander == true;
+        bool canFallOffBoard = usePlayerKing &&
+            (settings?.PlayerKingCanFallOffBoard ?? true);
 
-        _file = Mathf.Clamp(
-            playerPosition.x,
-            _pieceSpawner.GroundMinimumCoordinate,
-            _pieceSpawner.GroundMaximumCoordinate);
-        _rank = Mathf.Clamp(
-            playerPosition.y,
-            _pieceSpawner.GroundMinimumCoordinate,
-            _pieceSpawner.GroundMaximumCoordinate);
+        if (!_isFallingOffBoard)
+        {
+            _game.ResolvePlayerPieceCollisions(
+                team,
+                _heightInSquares,
+                settings?.CollisionRadiusInSquares ?? collisionRadiusInSquares,
+                usePlayerKing &&
+                    (settings?.PlayerKingCollidesWithFriendlyPieces ?? true),
+                ref playerPosition,
+                ref playerVelocity);
+            _knockbackVelocity = playerVelocity - desiredVelocity;
+
+            if (canFallOffBoard && IsOutsideBoardGround(playerPosition))
+            {
+                BeginBoardFall(playerVelocity);
+            }
+        }
+
+        if (_isFallingOffBoard)
+        {
+            UpdateBoardFall(deltaTime, settings);
+        }
+        else
+        {
+            UpdateJump(gameplayInputActive, keyboard, deltaTime);
+        }
+
+        if (canFallOffBoard)
+        {
+            float horizontalLimit = settings?
+                .PlayerKingMaximumOutOfBoundsDistanceInSquares ?? 4f;
+            _file = Mathf.Clamp(
+                playerPosition.x,
+                _pieceSpawner.GroundMinimumCoordinate - horizontalLimit,
+                _pieceSpawner.GroundMaximumCoordinate + horizontalLimit);
+            _rank = Mathf.Clamp(
+                playerPosition.y,
+                _pieceSpawner.GroundMinimumCoordinate - horizontalLimit,
+                _pieceSpawner.GroundMaximumCoordinate + horizontalLimit);
+        }
+        else
+        {
+            _file = Mathf.Clamp(
+                playerPosition.x,
+                _pieceSpawner.GroundMinimumCoordinate,
+                _pieceSpawner.GroundMaximumCoordinate);
+            _rank = Mathf.Clamp(
+                playerPosition.y,
+                _pieceSpawner.GroundMinimumCoordinate,
+                _pieceSpawner.GroundMaximumCoordinate);
+        }
         float squareSize = Mathf.Min(
             _pieceSpawner.FileSpacing,
             _pieceSpawner.RankSpacing);
@@ -238,6 +408,37 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
             _rank,
             _heightInSquares,
             _yaw);
+    }
+
+    private bool IsOutsideBoardGround(Vector2 position)
+    {
+        return position.x < _pieceSpawner.GroundMinimumCoordinate ||
+            position.x > _pieceSpawner.GroundMaximumCoordinate ||
+            position.y < _pieceSpawner.GroundMinimumCoordinate ||
+            position.y > _pieceSpawner.GroundMaximumCoordinate;
+    }
+
+    private void BeginBoardFall(Vector2 horizontalVelocity)
+    {
+        _isFallingOffBoard = true;
+        _isGrounded = false;
+        _verticalVelocity = Mathf.Min(0f, _verticalVelocity);
+        _fallHorizontalVelocity = horizontalVelocity;
+        _knockbackVelocity = Vector2.zero;
+    }
+
+    private void UpdateBoardFall(
+        float deltaTime,
+        PlayerCommanderSettings settings)
+    {
+        float gravity = settings?.PlayerKingFallGravityInSquares ??
+            gravityInSquares;
+        float eliminationDepth = settings?
+            .PlayerKingEliminationDepthInSquares ?? 2.5f;
+        _verticalVelocity -= gravity * deltaTime;
+        _heightInSquares = Mathf.Max(
+            -eliminationDepth,
+            _heightInSquares + _verticalVelocity * deltaTime);
     }
 
     private void UpdateJump(
@@ -295,25 +496,60 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         Vector3 lookDirection = Quaternion.AngleAxis(
             _pitch,
             horizontalRight) * horizontalForward;
-        if (_eyeHeightWorld <= 0f &&
-            _pieceSpawner.TryGetRepresentativePieceHeight(out float pieceHeight))
+        PlayerCommanderSettings settings = _game?.GetPlayerSettings();
+        NetworkPlayer localPlayer = ResolveLocalNetworkPlayer();
+        bool usePlayerKing =
+            _game?.GameMode?.Victory.UsesPlayerCommander == true;
+        float eyeHeight = 0f;
+
+        if (usePlayerKing &&
+            localPlayer != null &&
+            localPlayer.TryGetKingAvatarWorldHeight(up, out float kingHeight))
         {
-            PlayerCommanderSettings settings = _game?.GetPlayerSettings();
+            eyeHeight = kingHeight *
+                (settings?.PlayerKingEyeHeightAsModelFraction ?? 0.82f);
+        }
+        else if (!usePlayerKing &&
+                 _eyeHeightWorld <= 0f &&
+                 _pieceSpawner.TryGetRepresentativePieceHeight(out float pieceHeight))
+        {
             _eyeHeightWorld = pieceHeight *
                 (settings?.EyeHeightAsPieceFraction ?? eyeHeightAsPieceFraction);
         }
 
-        float eyeHeight = _eyeHeightWorld > 0f
-            ? _eyeHeightWorld
-            : Mathf.Min(
-                _pieceSpawner.FileSpacing,
-                _pieceSpawner.RankSpacing) *
-              (_game?.GetPlayerSettings()?.EyeHeightAsPieceFraction ??
-               eyeHeightAsPieceFraction);
+        if (eyeHeight <= 0f)
+        {
+            eyeHeight = _eyeHeightWorld > 0f
+                ? _eyeHeightWorld
+                : Mathf.Min(
+                    _pieceSpawner.FileSpacing,
+                    _pieceSpawner.RankSpacing) *
+                  (settings?.EyeHeightAsPieceFraction ??
+                   eyeHeightAsPieceFraction);
+        }
 
         _viewCamera.transform.SetPositionAndRotation(
             transform.position + up * eyeHeight,
             Quaternion.LookRotation(lookDirection, up));
+    }
+
+    private void UpdateCaptureRespawnCamera()
+    {
+        if (_viewCamera == null || _pieceSpawner == null)
+        {
+            return;
+        }
+
+        float squareSize = Mathf.Min(
+            _pieceSpawner.FileSpacing,
+            _pieceSpawner.RankSpacing);
+        float heightInSquares = _game?.GameMode?.CaptureMode
+            .KingRespawnCameraHeightInSquares ?? 10f;
+        Vector3 up = _pieceSpawner.BoardUp;
+        Vector3 centre = _pieceSpawner.GetBoardWorldPosition(3.5f, 3.5f);
+        _viewCamera.transform.SetPositionAndRotation(
+            centre + up * (heightInSquares * squareSize),
+            Quaternion.LookRotation(-up, _pieceSpawner.BoardForward));
     }
 
     private void UpdateGazeTarget(bool gameplayInputActive)
@@ -375,6 +611,13 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
             return;
         }
 
+        if (_game != null &&
+            _game.TryGetLocalCaptureKingRespawnRemaining(out float remaining))
+        {
+            DrawCaptureRespawnCountdown(remaining);
+            return;
+        }
+
         Rect shadow = new(Screen.width * 0.5f - 2f, Screen.height * 0.5f - 2f, 5f, 5f);
         GUI.color = new Color(0f, 0f, 0f, 0.8f);
         GUI.DrawTexture(shadow, Texture2D.whiteTexture);
@@ -382,6 +625,34 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         GUI.color = Color.white;
         GUI.DrawTexture(dot, Texture2D.whiteTexture);
         GUI.color = Color.white;
+    }
+
+    private void DrawCaptureRespawnCountdown(float remaining)
+    {
+        CaptureModeSettings settings = _game.GameMode.CaptureMode;
+        int fontSize = settings.KingRespawnCountdownFontSize;
+        Color color = settings.KingRespawnCountdownColor;
+
+        _respawnCountdownStyle ??= new GUIStyle(GUI.skin.label)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontStyle = FontStyle.Bold
+        };
+        _respawnCountdownShadowStyle ??= new GUIStyle(_respawnCountdownStyle);
+        _respawnCountdownStyle.fontSize = fontSize;
+        _respawnCountdownStyle.normal.textColor = color;
+        _respawnCountdownShadowStyle.fontSize = fontSize;
+        _respawnCountdownShadowStyle.normal.textColor =
+            new Color(0f, 0f, 0f, color.a * 0.75f);
+        string number = Mathf.Max(1, Mathf.CeilToInt(remaining)).ToString();
+        Rect rect = new(
+            Screen.width * 0.5f - 160f,
+            Screen.height * 0.5f - 100f,
+            320f,
+            200f);
+        Rect shadow = new(rect.x + 4f, rect.y + 4f, rect.width, rect.height);
+        GUI.Label(shadow, number, _respawnCountdownShadowStyle);
+        GUI.Label(rect, number, _respawnCountdownStyle);
     }
 
     private void OnDisable()

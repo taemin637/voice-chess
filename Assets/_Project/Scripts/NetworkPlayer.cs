@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -48,25 +49,45 @@ public sealed class NetworkPlayer : NetworkBehaviour
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    private readonly NetworkVariable<double> _captureRespawnEndServerTime = new(
+        0d,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     private string _selectionStatus = "Choose a team.";
     private ChessPieceSpawner _pieceSpawner;
     private NetworkChessGame _chessGame;
     private GameObject _avatarCapsule;
     private Renderer _avatarRenderer;
     private Material _avatarMaterial;
+    private GameObject _avatarKingVisual;
+    private GameObject _avatarKingPrefab;
+    private Renderer[] _avatarKingRenderers = Array.Empty<Renderer>();
+    private PlayerTeam _avatarKingTeam = PlayerTeam.Unassigned;
     private Vector3 _localAvatarBoardPose = new(3.5f, 0f, 3.5f);
     private float _localAvatarYaw;
     private float _nextAvatarPoseSendTime;
     private bool _hasLocalAvatarPose;
     private bool _avatarTransformInitialized;
+    private bool _serverAvatarRingOutStarted;
 
     public PlayerTeam Team => _team.Value;
     public bool IsEliminated => _isEliminated.Value;
+    public bool HasCaptureRespawnScheduled =>
+        _isEliminated.Value && _captureRespawnEndServerTime.Value > 0d;
+    public float RemainingCaptureRespawnTime =>
+        !HasCaptureRespawnScheduled || NetworkManager == null
+            ? 0f
+            : Mathf.Max(
+                0f,
+                (float)(_captureRespawnEndServerTime.Value -
+                    NetworkManager.ServerTime.Time));
     public Vector3 AvatarBoardPose => IsOwner && _hasLocalAvatarPose
         ? _localAvatarBoardPose
         : _avatarBoardPose.Value;
     public string SelectionStatus => _selectionStatus;
     public bool IsOwnedByMe => IsOwner;
+    public bool IsUsingKingAvatarModel => _avatarKingVisual != null;
     public string DisplayName => $"Player {OwnerClientId + 1:00}";
     public static IReadOnlyList<NetworkPlayer> Players => SpawnedPlayers;
 
@@ -125,6 +146,31 @@ public sealed class NetworkPlayer : NetworkBehaviour
     {
         bounds = default;
 
+        if (_avatarKingVisual != null)
+        {
+            bool foundRenderer = false;
+
+            foreach (Renderer renderer in _avatarKingRenderers)
+            {
+                if (renderer == null || !renderer.enabled)
+                {
+                    continue;
+                }
+
+                if (!foundRenderer)
+                {
+                    bounds = renderer.bounds;
+                    foundRenderer = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(renderer.bounds);
+                }
+            }
+
+            return foundRenderer && bounds.size.sqrMagnitude > 0.0001f;
+        }
+
         if (_avatarRenderer == null || !_avatarRenderer.enabled)
         {
             return false;
@@ -132,6 +178,43 @@ public sealed class NetworkPlayer : NetworkBehaviour
 
         bounds = _avatarRenderer.bounds;
         return bounds.size.sqrMagnitude > 0.0001f;
+    }
+
+    public bool TryGetKingAvatarWorldHeight(Vector3 worldUp, out float height)
+    {
+        height = 0f;
+
+        if (_avatarKingVisual == null || worldUp.sqrMagnitude <= 0.0001f)
+        {
+            return false;
+        }
+
+        Vector3 up = worldUp.normalized;
+        float minimum = float.PositiveInfinity;
+        float maximum = float.NegativeInfinity;
+
+        foreach (Renderer renderer in _avatarKingRenderers)
+        {
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            Bounds rendererBounds = renderer.bounds;
+            Vector3 extents = rendererBounds.extents;
+            float projectedCentre = Vector3.Dot(rendererBounds.center, up);
+            float projectedExtent =
+                Mathf.Abs(up.x) * extents.x +
+                Mathf.Abs(up.y) * extents.y +
+                Mathf.Abs(up.z) * extents.z;
+            minimum = Mathf.Min(minimum, projectedCentre - projectedExtent);
+            maximum = Mathf.Max(maximum, projectedCentre + projectedExtent);
+        }
+
+        height = maximum - minimum;
+        return !float.IsNaN(height) &&
+            !float.IsInfinity(height) &&
+            height > 0.001f;
     }
 
     public override void OnNetworkSpawn()
@@ -150,12 +233,12 @@ public sealed class NetworkPlayer : NetworkBehaviour
         EnsureAvatarCapsule();
         UpdateAvatarAppearance();
 
-        Debug.Log(
-            $"NetworkPlayer spawned. " +
-            $"Owner Client ID: {OwnerClientId}, " +
-            $"Team: {_team.Value}, " +
-            $"Is Owner: {IsOwner}, " +
-            $"Is Server: {IsServer}");
+        // Debug.Log(
+        //     $"NetworkPlayer spawned. " +
+        //     $"Owner Client ID: {OwnerClientId}, " +
+        //     $"Team: {_team.Value}, " +
+        //     $"Is Owner: {IsOwner}, " +
+        //     $"Is Server: {IsServer}");
     }
 
     public override void OnNetworkDespawn()
@@ -168,6 +251,8 @@ public sealed class NetworkPlayer : NetworkBehaviour
         {
             Destroy(_avatarCapsule);
         }
+
+        DestroyKingAvatarVisual();
 
         if (_avatarMaterial != null)
         {
@@ -201,9 +286,18 @@ public sealed class NetworkPlayer : NetworkBehaviour
             return;
         }
 
+        PlayerCommanderSettings settings = ResolvePlayerSettings();
+        bool allowPlayerKingFall = IsPlayerCommanderKing() &&
+            (settings?.PlayerKingCanFallOffBoard ?? true);
+        float minimumHeight = allowPlayerKingFall
+            ? -(settings?.PlayerKingEliminationDepthInSquares ?? 2.5f)
+            : 0f;
         _localAvatarBoardPose = new Vector3(
             file,
-            Mathf.Max(0f, heightInSquares),
+            Mathf.Clamp(
+                heightInSquares,
+                minimumHeight,
+                ResolveMaximumAvatarHeight()),
             rank);
         _localAvatarYaw = Mathf.Repeat(yaw, 360f);
         _hasLocalAvatarPose = true;
@@ -230,42 +324,150 @@ public sealed class NetworkPlayer : NetworkBehaviour
         float maximum = spawner != null
             ? spawner.GroundMaximumCoordinate
             : 7.5f + ChessPieceSpawner.DefaultBoardBorderWidthInSquares;
+        PlayerCommanderSettings settings = ResolvePlayerSettings();
+        bool allowPlayerKingFall = IsPlayerCommanderKing() &&
+            (settings?.PlayerKingCanFallOffBoard ?? true);
+        float horizontalMargin = allowPlayerKingFall
+            ? settings?.PlayerKingMaximumOutOfBoundsDistanceInSquares ?? 4f
+            : 0f;
+        float eliminationDepth = settings?
+            .PlayerKingEliminationDepthInSquares ?? 2.5f;
 
-        boardPose.x = Mathf.Clamp(boardPose.x, minimum, maximum);
-        boardPose.y = Mathf.Clamp(boardPose.y, 0f, ResolveMaximumAvatarHeight());
-        boardPose.z = Mathf.Clamp(boardPose.z, minimum, maximum);
+        boardPose.x = Mathf.Clamp(
+            boardPose.x,
+            minimum - horizontalMargin,
+            maximum + horizontalMargin);
+        boardPose.y = Mathf.Clamp(
+            boardPose.y,
+            allowPlayerKingFall ? -eliminationDepth : 0f,
+            ResolveMaximumAvatarHeight());
+        boardPose.z = Mathf.Clamp(
+            boardPose.z,
+            minimum - horizontalMargin,
+            maximum + horizontalMargin);
+
+        if (allowPlayerKingFall &&
+            (boardPose.x < minimum ||
+             boardPose.x > maximum ||
+             boardPose.z < minimum ||
+             boardPose.z > maximum))
+        {
+            _serverAvatarRingOutStarted = true;
+        }
+
         _avatarBoardPose.Value = boardPose;
         _avatarYaw.Value = Mathf.Repeat(yaw, 360f);
+
+        if (_serverAvatarRingOutStarted &&
+            boardPose.y <= -eliminationDepth + 0.001f)
+        {
+            SetEliminatedOnServer(true);
+        }
     }
 
     private void EnsureAvatarCapsule()
     {
-        if (_avatarCapsule != null || ResolvePieceSpawner() == null)
+        ChessPieceSpawner spawner = ResolvePieceSpawner();
+
+        if (spawner == null)
         {
             return;
         }
 
-        _avatarCapsule = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        _avatarCapsule.name = $"{DisplayName} Capsule";
-        _avatarCapsule.transform.SetParent(transform, worldPositionStays: true);
-        _avatarRenderer = _avatarCapsule.GetComponent<Renderer>();
-
-        Rigidbody rigidbody = _avatarCapsule.AddComponent<Rigidbody>();
-        rigidbody.isKinematic = true;
-        rigidbody.useGravity = false;
-        rigidbody.interpolation = RigidbodyInterpolation.Interpolate;
-        rigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
-
-        // The owner's first-person camera sits inside the local capsule. Keep its
-        // collider active for future falling pickups, but only render teammates
-        // and opponents on that client.
-        if (_avatarRenderer != null)
+        if (_avatarCapsule == null)
         {
-            _avatarRenderer.enabled = !IsOwner;
+            _avatarCapsule = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            _avatarCapsule.name = $"{DisplayName} Collision Capsule";
+            _avatarCapsule.transform.SetParent(transform, worldPositionStays: true);
+            _avatarRenderer = _avatarCapsule.GetComponent<Renderer>();
+
+            Rigidbody rigidbody = _avatarCapsule.AddComponent<Rigidbody>();
+            rigidbody.isKinematic = true;
+            rigidbody.useGravity = false;
+            rigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+            rigidbody.collisionDetectionMode =
+                CollisionDetectionMode.ContinuousSpeculative;
         }
 
-        UpdateAvatarAppearance();
-        UpdateAvatarTransform();
+        EnsureAvatarVisual(spawner);
+    }
+
+    private void EnsureAvatarVisual(ChessPieceSpawner spawner)
+    {
+        bool useKingModel = ResolveChessGame()?.GameMode?.Victory.UsesPlayerCommander ==
+            true;
+        GameObject kingPrefab = useKingModel && Team != PlayerTeam.Unassigned
+            ? spawner.GetKingPrefab(Team)
+            : null;
+
+        if (kingPrefab == null)
+        {
+            DestroyKingAvatarVisual();
+
+            if (_avatarRenderer != null)
+            {
+                _avatarRenderer.enabled = !IsOwner && !_isEliminated.Value;
+            }
+
+            return;
+        }
+
+        if (_avatarRenderer != null)
+        {
+            _avatarRenderer.enabled = false;
+        }
+
+        if (_avatarKingVisual == null ||
+            _avatarKingPrefab != kingPrefab ||
+            _avatarKingTeam != Team)
+        {
+            DestroyKingAvatarVisual();
+            _avatarKingVisual = Instantiate(kingPrefab);
+            _avatarKingVisual.name = $"{DisplayName} {Team} Player King";
+            _avatarKingVisual.transform.SetParent(transform, worldPositionStays: true);
+            _avatarKingPrefab = kingPrefab;
+            _avatarKingTeam = Team;
+            _avatarKingRenderers = _avatarKingVisual.GetComponentsInChildren<Renderer>(
+                includeInactive: true);
+
+            foreach (Collider visualCollider in
+                     _avatarKingVisual.GetComponentsInChildren<Collider>(includeInactive: true))
+            {
+                visualCollider.enabled = false;
+            }
+
+            foreach (Rigidbody visualRigidbody in
+                     _avatarKingVisual.GetComponentsInChildren<Rigidbody>(includeInactive: true))
+            {
+                visualRigidbody.isKinematic = true;
+                visualRigidbody.useGravity = false;
+            }
+
+            _avatarTransformInitialized = false;
+        }
+
+        bool showKing = !IsOwner && !_isEliminated.Value;
+
+        foreach (Renderer renderer in _avatarKingRenderers)
+        {
+            if (renderer != null)
+            {
+                renderer.enabled = showKing;
+            }
+        }
+    }
+
+    private void DestroyKingAvatarVisual()
+    {
+        if (_avatarKingVisual != null)
+        {
+            Destroy(_avatarKingVisual);
+        }
+
+        _avatarKingVisual = null;
+        _avatarKingPrefab = null;
+        _avatarKingRenderers = Array.Empty<Renderer>();
+        _avatarKingTeam = PlayerTeam.Unassigned;
     }
 
     private void UpdateAvatarTransform()
@@ -323,6 +525,36 @@ public sealed class NetworkPlayer : NetworkBehaviour
                     blend));
         }
 
+        if (_avatarKingVisual != null && _avatarKingPrefab != null)
+        {
+            Vector3 kingPosition = groundPosition +
+                spawner.BoardUp * (boardPose.y * squareSize);
+            Quaternion kingRotation = spawner.GetPieceWorldRotation(
+                Team,
+                _avatarKingPrefab,
+                yaw);
+
+            if (snapToPose)
+            {
+                _avatarKingVisual.transform.SetPositionAndRotation(
+                    kingPosition,
+                    kingRotation);
+            }
+            else
+            {
+                float blend = 1f - Mathf.Exp(-18f * Time.deltaTime);
+                _avatarKingVisual.transform.SetPositionAndRotation(
+                    Vector3.Lerp(
+                        _avatarKingVisual.transform.position,
+                        kingPosition,
+                        blend),
+                    Quaternion.Slerp(
+                        _avatarKingVisual.transform.rotation,
+                        kingRotation,
+                        blend));
+            }
+        }
+
         _avatarTransformInitialized = true;
         _avatarCapsule.transform.localScale = new Vector3(
             capsuleDiameter,
@@ -353,6 +585,11 @@ public sealed class NetworkPlayer : NetworkBehaviour
     private PlayerCommanderSettings ResolvePlayerSettings()
     {
         return ResolveChessGame()?.GetPlayerSettings();
+    }
+
+    private bool IsPlayerCommanderKing()
+    {
+        return ResolveChessGame()?.GameMode?.Victory.UsesPlayerCommander == true;
     }
 
     private int ResolveMaximumPlayersPerTeam()
@@ -387,6 +624,8 @@ public sealed class NetworkPlayer : NetworkBehaviour
 
     private void HandleTeamChanged(PlayerTeam previousTeam, PlayerTeam newTeam)
     {
+        DestroyKingAvatarVisual();
+        EnsureAvatarCapsule();
         UpdateAvatarAppearance();
     }
 
@@ -403,8 +642,79 @@ public sealed class NetworkPlayer : NetworkBehaviour
     {
         if (IsSpawned && IsServer)
         {
-            _isEliminated.Value = eliminated;
+            SetEliminatedOnServer(eliminated);
         }
+    }
+
+    private void SetEliminatedOnServer(bool eliminated)
+    {
+        if (!IsServer)
+        {
+            return;
+        }
+
+        if (eliminated &&
+            _isEliminated.Value &&
+            _captureRespawnEndServerTime.Value > 0d)
+        {
+            return;
+        }
+
+        _isEliminated.Value = eliminated;
+
+        if (!eliminated)
+        {
+            _captureRespawnEndServerTime.Value = 0d;
+            return;
+        }
+
+        NetworkChessGame game = ResolveChessGame();
+
+        if (game != null &&
+            game.IsCaptureKingRespawnEnabled &&
+            IsPlayerCommanderKing() &&
+            NetworkManager != null)
+        {
+            _captureRespawnEndServerTime.Value =
+                NetworkManager.ServerTime.Time +
+                game.CaptureKingRespawnDelaySeconds;
+        }
+        else
+        {
+            _captureRespawnEndServerTime.Value = 0d;
+        }
+    }
+
+    public void ServerRespawnForCapture(Vector2 boardPosition, float yaw)
+    {
+        if (!IsSpawned || !IsServer)
+        {
+            return;
+        }
+
+        Vector3 boardPose = new(boardPosition.x, 0f, boardPosition.y);
+        _avatarBoardPose.Value = boardPose;
+        _avatarYaw.Value = Mathf.Repeat(yaw, 360f);
+        _serverAvatarRingOutStarted = false;
+        _captureRespawnEndServerTime.Value = 0d;
+        _isEliminated.Value = false;
+        ApplyCaptureRespawnRpc(boardPose, _avatarYaw.Value);
+    }
+
+    [Rpc(
+        SendTo.Owner,
+        InvokePermission = RpcInvokePermission.Server)]
+    private void ApplyCaptureRespawnRpc(Vector3 boardPose, float yaw)
+    {
+        _localAvatarBoardPose = boardPose;
+        _localAvatarYaw = yaw;
+        _hasLocalAvatarPose = true;
+        _serverAvatarRingOutStarted = false;
+        FirstPersonCommanderController controller =
+            FindFirstObjectByType<FirstPersonCommanderController>();
+        controller?.ApplyCaptureRespawnPose(
+            new Vector2(boardPose.x, boardPose.z),
+            yaw);
     }
 
     public void ServerResetForMatch()
@@ -412,15 +722,34 @@ public sealed class NetworkPlayer : NetworkBehaviour
         if (IsSpawned && IsServer)
         {
             _isEliminated.Value = false;
+            _captureRespawnEndServerTime.Value = 0d;
+            _serverAvatarRingOutStarted = false;
         }
     }
 
     private void UpdateAvatarAppearance()
     {
+        if (_avatarKingVisual != null)
+        {
+            bool showKing = !IsOwner && !_isEliminated.Value;
+
+            foreach (Renderer renderer in _avatarKingRenderers)
+            {
+                if (renderer != null)
+                {
+                    renderer.enabled = showKing;
+                }
+            }
+
+            return;
+        }
+
         if (_avatarRenderer == null)
         {
             return;
         }
+
+        _avatarRenderer.enabled = !IsOwner && !_isEliminated.Value;
 
         if (_avatarMaterial == null)
         {
@@ -537,8 +866,8 @@ public sealed class NetworkPlayer : NetworkBehaviour
 
         if (chessGame == null || !chessGame.ResetGame())
         {
-            Debug.LogError(
-                "Cannot start the match because NetworkChessGame is not ready.");
+            // Debug.LogError(
+            //     "Cannot start the match because NetworkChessGame is not ready.");
             return;
         }
 
@@ -596,9 +925,9 @@ public sealed class NetworkPlayer : NetworkBehaviour
 
         if (whiteCount >= teamLimit && blackCount >= teamLimit)
         {
-            Debug.LogWarning(
-                $"Could not automatically assign Player {OwnerClientId + 1:00}: " +
-                "both teams are full.");
+            // Debug.LogWarning(
+            //     $"Could not automatically assign Player {OwnerClientId + 1:00}: " +
+            //     "both teams are full.");
             return;
         }
 
@@ -620,9 +949,9 @@ public sealed class NetworkPlayer : NetworkBehaviour
 
         _team.Value = assignedTeam;
 
-        Debug.Log(
-            $"Automatically assigned Player {OwnerClientId + 1:00} to " +
-            $"{assignedTeam} (White: {whiteCount}, Black: {blackCount}).");
+        // Debug.Log(
+        //     $"Automatically assigned Player {OwnerClientId + 1:00} to " +
+        //     $"{assignedTeam} (White: {whiteCount}, Black: {blackCount}).");
     }
 
     private void OnValidate()

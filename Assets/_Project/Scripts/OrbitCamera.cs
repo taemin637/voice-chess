@@ -41,7 +41,7 @@ public sealed class OrbitCamera : MonoBehaviour
     {
         if (target == null)
         {
-            Debug.LogError($"{nameof(OrbitCamera)} on '{name}' needs a target.", this);
+            // Debug.LogError($"{nameof(OrbitCamera)} on '{name}' needs a target.", this);
             enabled = false;
             return;
         }

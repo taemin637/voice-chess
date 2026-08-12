@@ -1,9 +1,11 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 public sealed partial class NetworkChessGame
 {
     private int _localHoveredPieceId = -1;
     private int _localConfirmedPieceId = -1;
+    private readonly List<ushort> _localConfirmedPieceIds = new();
     private bool _localChargeAimValid;
     private Vector2 _localChargeAimBoardPosition;
     private Vector3 _localChargeAimWorldPosition;
@@ -11,10 +13,20 @@ public sealed partial class NetworkChessGame
     private LineRenderer _localChargeLaser;
     private Material _localChargeLaserMaterial;
     private float _localChargeLaserExpiresAt;
+    private GameObject _localVoiceChargeArrowObject;
+    private LineRenderer _localVoiceChargeArrow;
+    private Material _localVoiceChargeArrowMaterial;
+    private float _localVoiceChargePreviewCost;
+    private float _localVoiceChargePreviewPower;
+    private float _localVoiceChargePreviewDistance;
+
+    public float LocalVoiceChargePreviewCost => _localVoiceChargePreviewCost;
+    public float LocalVoiceChargePreviewPower => _localVoiceChargePreviewPower;
+    public float LocalVoiceChargePreviewDistance => _localVoiceChargePreviewDistance;
 
     public bool HasLocalConfirmedSelection =>
-        _localConfirmedPieceId >= 0 &&
-        FindPieceIndexById((ushort)_localConfirmedPieceId) >= 0;
+        _localConfirmedPieceIds.Count > 0;
+    public int LocalConfirmedSelectionCount => _localConfirmedPieceIds.Count;
 
     public bool ConfirmLocalVoiceSelection(ushort pieceId, out string rejection)
     {
@@ -40,18 +52,60 @@ public sealed partial class NetworkChessGame
             return false;
         }
 
-        _localConfirmedPieceId = pieceId;
-        _localVoiceTargetPieceId = pieceId;
+        ClearLocalVoiceChargePreview();
+
+        int existingIndex = _localConfirmedPieceIds.IndexOf(pieceId);
+
+        if (existingIndex >= 0)
+        {
+            _localConfirmedPieceIds.RemoveAt(existingIndex);
+        }
+        else
+        {
+            int maximum = gameMode?.Commands.MaximumConfirmedSelections ?? 3;
+
+            while (_localConfirmedPieceIds.Count >= maximum)
+            {
+                _localConfirmedPieceIds.RemoveAt(0);
+            }
+
+            _localConfirmedPieceIds.Add(pieceId);
+        }
+
+        UpdateConfirmedSelectionState();
         pieceSpawner?.SetVoiceSelectionTarget(null);
-        pieceSpawner?.SetConfirmedVoiceSelectionTarget(pieceId);
         RecordLocalVoiceGazeSample();
         return true;
     }
 
+    private void UpdateConfirmedSelectionState()
+    {
+        _localConfirmedPieceId = _localConfirmedPieceIds.Count > 0
+            ? _localConfirmedPieceIds[0]
+            : -1;
+        _localVoiceTargetPieceId = _localConfirmedPieceId;
+        pieceSpawner?.SetConfirmedVoiceSelectionTargets(_localConfirmedPieceIds);
+    }
+
+    private void PruneLocalConfirmedSelections()
+    {
+        for (int index = _localConfirmedPieceIds.Count - 1; index >= 0; index--)
+        {
+            if (FindPieceIndexById(_localConfirmedPieceIds[index]) < 0)
+            {
+                _localConfirmedPieceIds.RemoveAt(index);
+            }
+        }
+
+        UpdateConfirmedSelectionState();
+    }
+
     private void ClearLocalConfirmedSelection()
     {
+        ClearLocalVoiceChargePreview();
+        _localConfirmedPieceIds.Clear();
         _localConfirmedPieceId = -1;
-        pieceSpawner?.SetConfirmedVoiceSelectionTarget(null);
+        pieceSpawner?.SetConfirmedVoiceSelectionTargets(_localConfirmedPieceIds);
 
         if (ActiveVoiceCommandVersion == VoiceCommandVersion.ConfirmedSelectionCharge)
         {
@@ -61,7 +115,7 @@ public sealed partial class NetworkChessGame
 
     private void ClearLocalConfirmedSelection(ushort commandedPieceId)
     {
-        if (_localConfirmedPieceId == commandedPieceId)
+        if (_localConfirmedPieceIds.Contains(commandedPieceId))
         {
             ClearLocalConfirmedSelection();
         }
@@ -284,6 +338,156 @@ public sealed partial class NetworkChessGame
         pieceSpawner.TryGetBoardCoordinates(worldPosition, out file, out rank);
     }
 
+    public void UpdateLocalVoiceChargePreview(
+        float voicedDurationSeconds,
+        float normalizedLoudness,
+        float pronunciationScore,
+        bool useStoredAim = false,
+        Vector2 storedAimBoardPosition = default)
+    {
+        CommandEconomySettings settings = gameMode?.Commands;
+
+        if (settings == null ||
+            !settings.UsesVoiceDurationCost ||
+            ActiveVoiceCommandVersion != VoiceCommandVersion.ConfirmedSelectionCharge ||
+            _localConfirmedPieceIds.Count == 0)
+        {
+            ClearLocalVoiceChargePreview();
+            return;
+        }
+
+        int pieceIndex = FindPieceIndexById((ushort)_localConfirmedPieceId);
+
+        if (pieceIndex < 0)
+        {
+            ClearLocalVoiceChargePreview();
+            return;
+        }
+
+        NetworkChessPieceState piece = _pieces[pieceIndex];
+        _localVoiceChargePreviewCost = settings.CostSystemEnabled
+            ? GetVoiceChargeCost(
+                piece.PieceType,
+                voicedDurationSeconds,
+                _localConfirmedPieceIds.Count)
+            : 0f;
+        _localVoiceChargePreviewPower = settings.GetVoiceChargePower(
+            voicedDurationSeconds,
+            normalizedLoudness,
+            pronunciationScore);
+        _localVoiceChargePreviewDistance = GetVoiceChargeDistance(
+            piece.PieceType,
+            _localVoiceChargePreviewPower);
+
+        bool previewAimValid = useStoredAim || _localChargeAimValid;
+        Vector2 previewAimBoardPosition = useStoredAim
+            ? storedAimBoardPosition
+            : _localChargeAimBoardPosition;
+
+        if (voicedDurationSeconds <= 0f ||
+            !previewAimValid ||
+            pieceSpawner == null ||
+            _localVoiceChargePreviewDistance <= 0f)
+        {
+            HideLocalVoiceChargeArrow();
+            return;
+        }
+
+        Vector2 piecePosition = new(piece.BoardFile, piece.BoardRank);
+        Vector2 boardDirection = previewAimBoardPosition - piecePosition;
+
+        if (boardDirection.sqrMagnitude < 0.0001f)
+        {
+            HideLocalVoiceChargeArrow();
+            return;
+        }
+
+        boardDirection.Normalize();
+        Vector2 arrowEndBoard = piecePosition +
+            boardDirection * _localVoiceChargePreviewDistance;
+        float squareSize = Mathf.Min(pieceSpawner.FileSpacing, pieceSpawner.RankSpacing);
+        float height = settings.VoiceChargeArrowHeightInSquares * squareSize;
+        Vector3 start = pieceSpawner.GetBoardWorldPosition(
+            piecePosition.x,
+            piecePosition.y) + pieceSpawner.BoardUp * height;
+        Vector3 end = pieceSpawner.GetBoardWorldPosition(
+            arrowEndBoard.x,
+            arrowEndBoard.y) + pieceSpawner.BoardUp * height;
+        EnsureLocalVoiceChargeArrow();
+
+        if (_localVoiceChargeArrow == null)
+        {
+            return;
+        }
+
+        Vector3 forward = end - start;
+        float worldLength = forward.magnitude;
+        forward = worldLength > 0.0001f ? forward / worldLength : pieceSpawner.BoardForward;
+        Vector3 side = Vector3.Cross(pieceSpawner.BoardUp, forward).normalized;
+        float headLength = Mathf.Min(
+            worldLength * settings.VoiceChargeArrowHeadLengthRatio,
+            squareSize * 0.9f);
+        float headWidth = headLength * 0.55f;
+        Vector3 headBase = end - forward * headLength;
+        Color color = settings.VoiceChargeArrowColor;
+        float width = settings.VoiceChargeArrowWidthInSquares * squareSize;
+        _localVoiceChargeArrow.startWidth = width;
+        _localVoiceChargeArrow.endWidth = width;
+        _localVoiceChargeArrow.startColor = color;
+        _localVoiceChargeArrow.endColor = color;
+
+        if (_localVoiceChargeArrowMaterial != null)
+        {
+            _localVoiceChargeArrowMaterial.color = color;
+        }
+
+        _localVoiceChargeArrow.SetPosition(0, start);
+        _localVoiceChargeArrow.SetPosition(1, end);
+        _localVoiceChargeArrow.SetPosition(2, headBase + side * headWidth);
+        _localVoiceChargeArrow.SetPosition(3, end);
+        _localVoiceChargeArrow.SetPosition(4, headBase - side * headWidth);
+        _localVoiceChargeArrowObject.SetActive(true);
+    }
+
+    public void ClearLocalVoiceChargePreview()
+    {
+        _localVoiceChargePreviewCost = 0f;
+        _localVoiceChargePreviewPower = 0f;
+        _localVoiceChargePreviewDistance = 0f;
+        HideLocalVoiceChargeArrow();
+    }
+
+    private void EnsureLocalVoiceChargeArrow()
+    {
+        if (_localVoiceChargeArrowObject != null)
+        {
+            return;
+        }
+
+        _localVoiceChargeArrowObject = new GameObject("Local Voice Charge Arrow");
+        _localVoiceChargeArrow = _localVoiceChargeArrowObject.AddComponent<LineRenderer>();
+        _localVoiceChargeArrow.useWorldSpace = true;
+        _localVoiceChargeArrow.positionCount = 5;
+        _localVoiceChargeArrow.shadowCastingMode =
+            UnityEngine.Rendering.ShadowCastingMode.Off;
+        _localVoiceChargeArrow.receiveShadows = false;
+        Shader shader = Shader.Find("Sprites/Default");
+
+        if (shader != null)
+        {
+            _localVoiceChargeArrowMaterial = new Material(shader);
+            _localVoiceChargeArrow.sharedMaterial = _localVoiceChargeArrowMaterial;
+        }
+    }
+
+    private void HideLocalVoiceChargeArrow()
+    {
+        if (_localVoiceChargeArrowObject != null)
+        {
+            _localVoiceChargeArrowObject.SetActive(false);
+        }
+    }
+
     private void ShowLocalChargeLaser(Vector2 targetBoardPosition)
     {
         if (pieceSpawner == null)
@@ -354,6 +558,8 @@ public sealed partial class NetworkChessGame
 
     private void CleanupLocalChargeLaser()
     {
+        ClearLocalVoiceChargePreview();
+
         if (_localChargeLaserObject != null)
         {
             Destroy(_localChargeLaserObject);
@@ -365,6 +571,19 @@ public sealed partial class NetworkChessGame
         {
             Destroy(_localChargeLaserMaterial);
             _localChargeLaserMaterial = null;
+        }
+
+        if (_localVoiceChargeArrowObject != null)
+        {
+            Destroy(_localVoiceChargeArrowObject);
+            _localVoiceChargeArrowObject = null;
+            _localVoiceChargeArrow = null;
+        }
+
+        if (_localVoiceChargeArrowMaterial != null)
+        {
+            Destroy(_localVoiceChargeArrowMaterial);
+            _localVoiceChargeArrowMaterial = null;
         }
     }
 }

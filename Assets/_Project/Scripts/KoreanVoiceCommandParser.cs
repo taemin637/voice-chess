@@ -37,6 +37,17 @@ public readonly struct KoreanVoiceParseResult
 public static class KoreanVoiceCommandParser
 {
     private const float FuzzyAcceptanceScore = 0.72f;
+    private const float StretchedChargeAcceptanceScore = 0.58f;
+    private const string ChargePhonemes = "ㄷㅗㄹㅈㅣㄴ";
+    private const string HangulInitials = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
+    private const string HangulVowels = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ";
+    private static readonly string[] HangulFinals =
+    {
+        string.Empty, "ㄱ", "ㄲ", "ㄳ", "ㄴ", "ㄵ", "ㄶ", "ㄷ",
+        "ㄹ", "ㄺ", "ㄻ", "ㄼ", "ㄽ", "ㄾ", "ㄿ", "ㅀ", "ㅁ",
+        "ㅂ", "ㅄ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ",
+        "ㅍ", "ㅎ"
+    };
 
     private readonly struct PhraseDefinition
     {
@@ -212,6 +223,19 @@ public static class KoreanVoiceCommandParser
             }
         }
 
+        float stretchedChargeScore = GetChargePronunciationScore(comparable);
+
+        if (stretchedChargeScore >= StretchedChargeAcceptanceScore &&
+            HasChargePhonemeStructure(comparable))
+        {
+            return Accepted(
+                PieceVoiceCommand.Charge,
+                normalized,
+                "돌진",
+                stretchedChargeScore,
+                "늘이거나 반복한 ‘돌진’ 발음을 음소 단위로 정규화");
+        }
+
         if (TryKeywordMatch(comparable, normalized, out KoreanVoiceParseResult keywordResult))
         {
             return keywordResult;
@@ -274,6 +298,17 @@ public static class KoreanVoiceCommandParser
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Scores an elongated or repeated pronunciation such as 도오올지이인 or
+    /// 돌ㄹㄹ진ㄴㄴ against the phonemes of 돌진.
+    /// </summary>
+    public static float GetChargePronunciationScore(string recognizedText)
+    {
+        string phonemes = MakeStretchedPhonemeComparable(
+            MakeComparable(recognizedText));
+        return GetSimilarity(phonemes, ChargePhonemes);
     }
 
     private static string MakeSequenceComparable(string text)
@@ -396,6 +431,98 @@ public static class KoreanVoiceCommandParser
         while (endingRemoved);
 
         return result;
+    }
+
+    private static bool HasChargePhonemeStructure(string text)
+    {
+        string phonemes = MakeStretchedPhonemeComparable(text);
+        int liquid = phonemes.IndexOf('ㄹ');
+        int chargeInitial = liquid < 0
+            ? -1
+            : FindAnyAfter(phonemes, liquid + 1, 'ㅈ', 'ㅉ');
+        int finalN = chargeInitial < 0
+            ? -1
+            : phonemes.IndexOf('ㄴ', chargeInitial + 1);
+        return liquid >= 0 && chargeInitial > liquid && finalN > chargeInitial;
+    }
+
+    private static int FindAnyAfter(
+        string text,
+        int startIndex,
+        char first,
+        char second)
+    {
+        for (int index = Math.Max(0, startIndex); index < text.Length; index++)
+        {
+            if (text[index] == first || text[index] == second)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string MakeStretchedPhonemeComparable(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        StringBuilder builder = new(text.Length * 3);
+        char previousVowel = '\0';
+
+        foreach (char character in text)
+        {
+            if (character >= '가' && character <= '힣')
+            {
+                int syllable = character - '가';
+                char initial = HangulInitials[syllable / 588];
+                char vowel = HangulVowels[(syllable % 588) / 28];
+                string final = HangulFinals[syllable % 28];
+                bool prolongedVowel = initial == 'ㅇ' && vowel == previousVowel;
+
+                if (!prolongedVowel)
+                {
+                    AppendCollapsed(builder, initial);
+                    AppendCollapsed(builder, vowel);
+                    previousVowel = vowel;
+                }
+
+                foreach (char finalCharacter in final)
+                {
+                    AppendCollapsed(builder, finalCharacter);
+                }
+
+                continue;
+            }
+
+            if (IsCompatibilityJamo(character))
+            {
+                AppendCollapsed(builder, character);
+
+                if (HangulVowels.IndexOf(character) >= 0)
+                {
+                    previousVowel = character;
+                }
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsCompatibilityJamo(char character)
+    {
+        return character >= 'ㄱ' && character <= 'ㅣ';
+    }
+
+    private static void AppendCollapsed(StringBuilder builder, char character)
+    {
+        if (builder.Length == 0 || builder[builder.Length - 1] != character)
+        {
+            builder.Append(character);
+        }
     }
 
     private static bool TryKeywordMatch(

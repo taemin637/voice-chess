@@ -54,6 +54,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
     private readonly ConcurrentQueue<RecognitionOutcome> _outcomes = new();
     private readonly ConcurrentQueue<CapturedUtterance> _utteranceQueue = new();
+    private readonly ConcurrentQueue<string> _partialTranscripts = new();
     private readonly List<float> _speechLoudnessSamples = new();
     private readonly List<LoudnessFrame> _voicedLoudnessFrames = new();
     private readonly List<LoudnessFrame> _preRollLoudnessFrames = new();
@@ -113,6 +114,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private bool _automaticStopRequested;
     private bool _currentRecognitionIsAutomatic;
     private bool _currentRecognitionExecutesCommand;
+    private float _liveChargePronunciationScore;
 
     private static bool _buildCredentialsLoaded;
     private static string _buildSpeechKey = string.Empty;
@@ -191,6 +193,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         public readonly float SpeechStartAverageDecibels;
         public readonly float SpeechEndAverageDecibels;
         public readonly float SpeechAverageDecibels;
+        public readonly float SpeechDurationSeconds;
 
         public CapturedUtterance(
             bool executeCommand,
@@ -204,7 +207,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             float commandReachInSquares,
             float speechStartAverageDecibels,
             float speechEndAverageDecibels,
-            float speechAverageDecibels)
+            float speechAverageDecibels,
+            float speechDurationSeconds)
         {
             ExecuteCommand = executeCommand;
             PcmData = pcmData;
@@ -218,6 +222,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             SpeechStartAverageDecibels = speechStartAverageDecibels;
             SpeechEndAverageDecibels = speechEndAverageDecibels;
             SpeechAverageDecibels = speechAverageDecibels;
+            SpeechDurationSeconds = speechDurationSeconds;
         }
     }
 
@@ -238,13 +243,28 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             AudioStreamFormat streamFormat,
             PushAudioInputStream pushStream,
             AudioConfig audioConfig,
-            SpeechRecognizer recognizer)
+            SpeechRecognizer recognizer,
+            Action<string> recognizingCallback)
         {
             _speechConfig = speechConfig;
             _streamFormat = streamFormat;
             _pushStream = pushStream;
             _audioConfig = audioConfig;
             _recognizer = recognizer;
+
+            if (recognizingCallback != null)
+            {
+                _recognizer.Recognizing += (_, eventArgs) =>
+                {
+                    string partialText = eventArgs.Result?.Text;
+
+                    if (!string.IsNullOrWhiteSpace(partialText))
+                    {
+                        recognizingCallback(partialText);
+                    }
+                };
+            }
+
             Recognition = _recognizer.RecognizeOnceAsync();
         }
 
@@ -304,6 +324,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         public readonly float SpeechStartAverageDecibels;
         public readonly float SpeechEndAverageDecibels;
         public readonly float SpeechAverageDecibels;
+        public readonly float SpeechDurationSeconds;
+        public readonly float TextSimilarityScore;
 
         private RecognitionOutcome(
             CapturedUtterance utterance,
@@ -311,7 +333,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             PieceVoiceCommand[] commands,
             string text,
             double confidence,
-            string error)
+            string error,
+            float textSimilarityScore)
         {
             Accepted = accepted;
             ExecuteCommand = utterance.ExecuteCommand;
@@ -329,13 +352,16 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             SpeechStartAverageDecibels = utterance.SpeechStartAverageDecibels;
             SpeechEndAverageDecibels = utterance.SpeechEndAverageDecibels;
             SpeechAverageDecibels = utterance.SpeechAverageDecibels;
+            SpeechDurationSeconds = utterance.SpeechDurationSeconds;
+            TextSimilarityScore = Mathf.Clamp01(textSimilarityScore);
         }
 
         public static RecognitionOutcome Success(
             CapturedUtterance utterance,
             PieceVoiceCommand[] commands,
             string text,
-            double confidence)
+            double confidence,
+            float textSimilarityScore)
         {
             return new RecognitionOutcome(
                 utterance,
@@ -343,14 +369,16 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                 commands,
                 text,
                 confidence,
-                null);
+                null,
+                textSimilarityScore);
         }
 
         public static RecognitionOutcome Rejected(
             CapturedUtterance utterance,
             string text,
             double confidence,
-            string error)
+            string error,
+            float textSimilarityScore = 0f)
         {
             return new RecognitionOutcome(
                 utterance,
@@ -358,7 +386,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                 Array.Empty<PieceVoiceCommand>(),
                 text,
                 confidence,
-                error);
+                error,
+                textSimilarityScore);
         }
     }
 
@@ -416,6 +445,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
         UpdateMicrophoneCapture();
         ProcessAutomaticVoiceRequests();
+        ProcessPartialTranscripts();
 
         while (_outcomes.TryDequeue(out RecognitionOutcome outcome))
         {
@@ -527,6 +557,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             out float speechStartAverageDecibels,
             out float speechEndAverageDecibels,
             out float speechAverageDecibels);
+        float speechDurationSeconds = GetVoicedSpeechDuration();
+        UpdateLocalVoiceChargePreview();
         _isCapturingSpeech = false;
         _status = "입력 종료 · 결과 분석 중...";
 
@@ -542,7 +574,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             _lastCommandReachInSquares,
             speechStartAverageDecibels,
             speechEndAverageDecibels,
-            speechAverageDecibels);
+            speechAverageDecibels,
+            speechDurationSeconds);
         LiveRecognitionSession liveSession = _activeLiveSession;
         bool useLiveResult = liveSession != null && !_activeLiveSessionFailed;
         _activeLiveSession = null;
@@ -646,6 +679,13 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
         _currentRecognitionIsAutomatic = includePreRoll;
         _currentRecognitionExecutesCommand = executeCommand;
+        _liveChargePronunciationScore = 0f;
+
+        while (_partialTranscripts.TryDequeue(out _))
+        {
+        }
+
+        _game?.ClearLocalVoiceChargePreview();
         _speechLoudnessSamples.Clear();
         _voicedLoudnessFrames.Clear();
 
@@ -692,7 +732,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         {
             try
             {
-                _activeLiveSession = CreateLiveRecognitionSession();
+                _activeLiveSession = CreateLiveRecognitionSession(
+                    partialText => _partialTranscripts.Enqueue(partialText));
                 _azureWorkerBusy = true;
             }
             catch (Exception)
@@ -771,7 +812,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         }
     }
 
-    private static LiveRecognitionSession CreateLiveRecognitionSession()
+    private static LiveRecognitionSession CreateLiveRecognitionSession(
+        Action<string> recognizingCallback)
     {
         GetCredentials(out string subscriptionKey, out string region);
 
@@ -820,7 +862,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                 streamFormat,
                 pushStream,
                 audioConfig,
-                recognizer);
+                recognizer,
+                recognizingCallback);
         }
         catch
         {
@@ -903,6 +946,44 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             !_utteranceQueue.IsEmpty;
     }
 
+    private void ProcessPartialTranscripts()
+    {
+        while (_partialTranscripts.TryDequeue(out string partialText))
+        {
+            if (!_isCapturingSpeech)
+            {
+                continue;
+            }
+
+            _liveChargePronunciationScore =
+                KoreanVoiceCommandParser.GetChargePronunciationScore(partialText);
+        }
+
+        if (_isCapturingSpeech)
+        {
+            UpdateLocalVoiceChargePreview();
+        }
+    }
+
+    private void UpdateLocalVoiceChargePreview()
+    {
+        if (!_currentRecognitionExecutesCommand || _game == null)
+        {
+            return;
+        }
+
+        float commandLoudness = Mathf.InverseLerp(
+            QuietCommandDecibels,
+            LoudCommandDecibels,
+            GetCurrentCommandLoudnessDecibels());
+        _game.UpdateLocalVoiceChargePreview(
+            GetVoicedSpeechDuration(),
+            commandLoudness,
+            _liveChargePronunciationScore,
+            _utteranceStartTargetCaptured && _utteranceStartHasChargeAim,
+            _utteranceStartChargeAimBoardPosition);
+    }
+
     private RecognitionOutcome CreateOutcome(
         SpeechRecognitionResult result,
         CapturedUtterance utterance)
@@ -941,7 +1022,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                     utterance,
                     parses.Select(parse => parse.Command).ToArray(),
                     candidate.Text,
-                    candidate.Confidence);
+                    candidate.Confidence,
+                    parses.Average(parse => parse.Score));
             }
         }
 
@@ -957,7 +1039,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             utterance,
             text,
             confidence,
-            error);
+            error,
+            bestParse.Score);
     }
 
     private void HandleOutcome(RecognitionOutcome outcome)
@@ -975,6 +1058,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
         if (!outcome.Accepted)
         {
+            _game?.ClearLocalVoiceChargePreview();
             _status = string.IsNullOrWhiteSpace(_lastTranscript)
                 ? outcome.Error
                 : $"“{_lastTranscript}” — {outcome.Error}";
@@ -992,18 +1076,19 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             " + ",
             outcome.Commands.Select(KoreanVoiceCommand.GetDisplayName));
 
-        Debug.Log(
-            $"[음성 명령 dB] “{outcome.Text}” → {commandName} | " +
-            $"시작 {SpeechBoundaryAverageSeconds:F2}초 평균 " +
-            $"{outcome.SpeechStartAverageDecibels:F1} dBFS | " +
-            $"끝 {SpeechBoundaryAverageSeconds:F2}초 평균 " +
-            $"{outcome.SpeechEndAverageDecibels:F1} dBFS | " +
-            $"전체 발화 평균 {outcome.SpeechAverageDecibels:F1} dBFS | " +
-            $"기존 이동 기준(P80) {outcome.CommandLoudnessDecibels:F1} dBFS",
-            this);
+        // Debug.Log(
+        //     $"[음성 명령 dB] “{outcome.Text}” → {commandName} | " +
+        //     $"시작 {SpeechBoundaryAverageSeconds:F2}초 평균 " +
+        //     $"{outcome.SpeechStartAverageDecibels:F1} dBFS | " +
+        //     $"끝 {SpeechBoundaryAverageSeconds:F2}초 평균 " +
+        //     $"{outcome.SpeechEndAverageDecibels:F1} dBFS | " +
+        //     $"전체 발화 평균 {outcome.SpeechAverageDecibels:F1} dBFS | " +
+        //     $"기존 이동 기준(P80) {outcome.CommandLoudnessDecibels:F1} dBFS",
+        //     this);
 
         if (!outcome.ExecuteCommand)
         {
+            _game?.ClearLocalVoiceChargePreview();
             _status =
                 $"테스트: “{outcome.Text}” → {commandName} ({outcome.Confidence:P0})";
             return;
@@ -1011,12 +1096,26 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
         if (!outcome.HasVoiceTarget)
         {
+            _game?.ClearLocalVoiceChargePreview();
             _status = _game != null &&
                 _game.ActiveVoiceCommandVersion ==
                     VoiceCommandVersion.ConfirmedSelectionCharge
                 ? $"{GetConfirmSelectionButtonName()}으로 확정 선택한 아군 말이 없습니다."
                 : "명령을 말하기 시작할 때 바라본 아군 말이 없었습니다.";
             return;
+        }
+
+        float finalChargeCost = 0f;
+        float finalChargePower = 0f;
+        float finalChargeDistance = 0f;
+        float finalPronunciationScore = outcome.TextSimilarityScore;
+        CommandEconomySettings economy = _game?.GameMode?.Commands;
+
+        if (economy != null)
+        {
+            finalPronunciationScore = economy.GetVoiceChargePronunciationScore(
+                (float)outcome.Confidence,
+                outcome.TextSimilarityScore);
         }
 
         foreach (PieceVoiceCommand command in outcome.Commands)
@@ -1027,6 +1126,22 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                 LoudCommandDecibels,
                 outcome.CommandLoudnessDecibels);
 
+            if (command == PieceVoiceCommand.Charge &&
+                economy != null &&
+                economy.UsesVoiceDurationCost &&
+                _game != null)
+            {
+                _game.UpdateLocalVoiceChargePreview(
+                    outcome.SpeechDurationSeconds,
+                    commandLoudness,
+                    finalPronunciationScore,
+                    outcome.HasChargeAim,
+                    outcome.ChargeAimBoardPosition);
+                finalChargeCost = _game.LocalVoiceChargePreviewCost;
+                finalChargePower = _game.LocalVoiceChargePreviewPower;
+                finalChargeDistance = _game.LocalVoiceChargePreviewDistance;
+            }
+
             if (_game == null ||
                 !_game.TryExecuteLocalVoiceCommand(
                     outcome.VoiceTargetPieceId,
@@ -1036,8 +1151,11 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                     command,
                     outcome.HasChargeAim,
                     outcome.ChargeAimBoardPosition,
+                    outcome.SpeechDurationSeconds,
+                    finalPronunciationScore,
                     out rejection))
             {
+                _game?.ClearLocalVoiceChargePreview();
                 _status = string.IsNullOrWhiteSpace(rejection)
                     ? "명령을 실행할 수 없습니다."
                     : rejection;
@@ -1045,10 +1163,19 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             }
         }
 
-        _status =
-            $"“{outcome.Text}” → {commandName} ({outcome.Confidence:P0}) · " +
-            $"음량 {outcome.CommandLoudnessDecibels:F1} dBFS / " +
-            $"전달 {outcome.CommandReachInSquares:F1}칸";
+        _game?.ClearLocalVoiceChargePreview();
+        bool usedVoiceCharge = outcome.Commands.Contains(PieceVoiceCommand.Charge) &&
+            economy != null &&
+            economy.UsesVoiceDurationCost;
+        _status = usedVoiceCharge
+            ? $"“{outcome.Text}” → {commandName} · " +
+              $"발화 {outcome.SpeechDurationSeconds:F2}초 / " +
+              $"발음 {finalPronunciationScore:P0} / " +
+              $"세기 {finalChargePower:P0} / " +
+              $"예상 {finalChargeDistance:F1}칸 / 코스트 {finalChargeCost:0.##}"
+            : $"“{outcome.Text}” → {commandName} ({outcome.Confidence:P0}) · " +
+              $"음량 {outcome.CommandLoudnessDecibels:F1} dBFS / " +
+              $"전달 {outcome.CommandReachInSquares:F1}칸";
     }
 
     private void RefreshMicrophoneDevices(bool restartCapture)
@@ -1600,13 +1727,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             return;
         }
 
-        List<float> orderedSamples = new(_speechLoudnessSamples);
-        orderedSamples.Sort();
-        int percentileIndex = Mathf.Clamp(
-            Mathf.CeilToInt((orderedSamples.Count - 1) * 0.8f),
-            0,
-            orderedSamples.Count - 1);
-        _lastCommandLoudnessDecibels = orderedSamples[percentileIndex];
+        _lastCommandLoudnessDecibels = GetCurrentCommandLoudnessDecibels();
         float loudness = Mathf.InverseLerp(
             QuietCommandDecibels,
             LoudCommandDecibels,
@@ -1615,6 +1736,34 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             MinimumCommandReach,
             MaximumCommandReach,
             loudness * loudness);
+    }
+
+    private float GetCurrentCommandLoudnessDecibels()
+    {
+        if (_speechLoudnessSamples.Count == 0)
+        {
+            return -80f;
+        }
+
+        List<float> orderedSamples = new(_speechLoudnessSamples);
+        orderedSamples.Sort();
+        int percentileIndex = Mathf.Clamp(
+            Mathf.CeilToInt((orderedSamples.Count - 1) * 0.8f),
+            0,
+            orderedSamples.Count - 1);
+        return orderedSamples[percentileIndex];
+    }
+
+    private float GetVoicedSpeechDuration()
+    {
+        float duration = 0f;
+
+        foreach (LoudnessFrame frame in _voicedLoudnessFrames)
+        {
+            duration += frame.Duration;
+        }
+
+        return duration;
     }
 
     private void CalculateSpeechLoudnessAverages(
@@ -1819,8 +1968,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
             if (!File.Exists(credentialsPath))
             {
-                Debug.LogError(
-                    $"Azure Speech build credentials were not found: {credentialsPath}");
+                // Debug.LogError(
+                //     $"Azure Speech build credentials were not found: {credentialsPath}");
                 return;
             }
 
@@ -1830,17 +1979,17 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
             if (credentials == null)
             {
-                Debug.LogError("Azure Speech build credentials JSON is invalid.");
+                // Debug.LogError("Azure Speech build credentials JSON is invalid.");
                 return;
             }
 
             _buildSpeechKey = credentials.key?.Trim() ?? string.Empty;
             _buildSpeechRegion = credentials.region?.Trim() ?? string.Empty;
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            Debug.LogError(
-                $"Failed to load Azure Speech build credentials: {exception.Message}");
+            // Debug.LogError(
+            //     $"Failed to load Azure Speech build credentials: {exception.Message}");
         }
     }
 #endif
@@ -1925,6 +2074,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private void OnDestroy()
     {
         _isDestroyed = true;
+        _game?.ClearLocalVoiceChargePreview();
         StopMicrophoneCapture();
         _capturedSpeechPcm.Clear();
         _activeLiveSession?.Dispose();

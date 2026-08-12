@@ -70,6 +70,9 @@ public sealed class SessionManager : MonoBehaviour
 
     public static bool IsFrontEndVisible =>
         _instance != null &&
+#if UNITY_EDITOR
+        !EditorSoloPlayTester.IsActive &&
+#endif
         (!NetworkPlayer.MatchStarted ||
          _instance._showLobbyOverMatch ||
          _instance.IsGameOver());
@@ -81,6 +84,13 @@ public sealed class SessionManager : MonoBehaviour
 
     private async void Start()
     {
+#if UNITY_EDITOR
+        if (EditorSoloPlayTester.IsActive)
+        {
+            return;
+        }
+#endif
+
         try
         {
             await UnityServices.InitializeAsync();
@@ -96,7 +106,7 @@ public sealed class SessionManager : MonoBehaviour
         catch (Exception exception)
         {
             SetStatus($"Could not connect: {exception.Message}", true);
-            Debug.LogException(exception);
+            // Debug.LogException(exception);
         }
     }
 
@@ -167,31 +177,33 @@ public sealed class SessionManager : MonoBehaviour
 
         Rect timerPanel = InterfaceSettings?.MatchTimerPanel ??
             new Rect(675f, 30f, 250f, 78f);
-        DrawShadowedPanel(timerPanel, _panel);
-        string primaryStatus;
+        bool showTimerPanel = chessGame.IsMatchClockEnabled;
 
-        if (chessGame.CommandMode == CommandIssuingMode.AlternatingTurns)
+        if (showTimerPanel)
         {
-            float turnTime = chessGame.RemainingTurnTime;
-            string turnClock = turnTime > 0f
-                ? $"  {Mathf.CeilToInt(turnTime)}s"
-                : string.Empty;
-            primaryStatus = $"{chessGame.ActiveCommandTeam} TURN{turnClock}";
-        }
-        else if (chessGame.IsMatchClockEnabled)
-        {
-            int seconds = Mathf.CeilToInt(chessGame.RemainingTime);
-            primaryStatus = $"{seconds / 60:00}:{seconds % 60:00}";
-        }
-        else
-        {
-            primaryStatus = "NO TIME LIMIT";
-        }
+            DrawShadowedPanel(timerPanel, _panel);
+            string primaryStatus;
 
-        GUI.Label(
-            timerPanel,
-            primaryStatus,
-            _heroTitle);
+            if (chessGame.CommandMode == CommandIssuingMode.AlternatingTurns)
+            {
+                float turnTime = chessGame.RemainingTurnTime;
+                string turnClock = turnTime > 0f
+                    ? $"  {Mathf.CeilToInt(turnTime)}s"
+                    : string.Empty;
+                primaryStatus =
+                    $"{chessGame.ActiveCommandTeam} TURN{turnClock}";
+            }
+            else
+            {
+                int seconds = Mathf.CeilToInt(chessGame.RemainingTime);
+                primaryStatus = $"{seconds / 60:00}:{seconds % 60:00}";
+            }
+
+            GUI.Label(
+                timerPanel,
+                primaryStatus,
+                _heroTitle);
+        }
 
         NetworkPlayer localPlayer = NetworkPlayer.LocalPlayer;
 
@@ -203,16 +215,39 @@ public sealed class SessionManager : MonoBehaviour
         if (chessGame.IsCaptureModeEnabled)
         {
             Rect scorePanel = InterfaceSettings?.CaptureScorePanel ??
-                new Rect(575f, 174f, 450f, 46f);
+                new Rect(945f, 30f, 450f, 78f);
+            scorePanel.height = Mathf.Max(78f, scorePanel.height);
+
+            if (!showTimerPanel)
+            {
+                scorePanel.x = (DesignWidth - scorePanel.width) * 0.5f;
+                scorePanel.y = timerPanel.y;
+            }
+
             DrawShadowedPanel(scorePanel, _panelSoft);
-            string ruleLabel = chessGame.ActiveCaptureScoringRule ==
-                CaptureScoringRule.PeriodicPerPiece
-                ? "CAPTURE SCORE"
-                : "ZONE VALUE";
-            GUI.Label(
-                scorePanel,
-                $"{ruleLabel}  W {chessGame.WhiteCaptureScore:F1}  |  B {chessGame.BlackCaptureScore:F1}",
-                _subtitle);
+            bool wholeNumberScore = chessGame.ActiveCaptureModeVersion ==
+                CaptureModeVersion.RandomRoundControl;
+            string whiteScore = wholeNumberScore
+                ? chessGame.WhiteCaptureScore.ToString("0")
+                : chessGame.WhiteCaptureScore.ToString("0.#");
+            string blackScore = wholeNumberScore
+                ? chessGame.BlackCaptureScore.ToString("0")
+                : chessGame.BlackCaptureScore.ToString("0.#");
+            float rowHeight = scorePanel.height * 0.5f;
+            const float horizontalPadding = 28f;
+            Rect whiteRow = new(
+                scorePanel.x + horizontalPadding,
+                scorePanel.y,
+                scorePanel.width - horizontalPadding * 2f,
+                rowHeight);
+            Rect blackRow = new(
+                whiteRow.x,
+                scorePanel.y + rowHeight,
+                whiteRow.width,
+                rowHeight);
+
+            GUI.Label(whiteRow, $"White: {whiteScore}", _body);
+            GUI.Label(blackRow, $"Black: {blackScore}", _body);
         }
 
         GUI.matrix = previousMatrix;
@@ -229,7 +264,7 @@ public sealed class SessionManager : MonoBehaviour
 
         float maximum = Mathf.Max(0.01f, chessGame.MaximumCommandCost);
         float current = Mathf.Clamp(
-            chessGame.GetCommandPoints(localTeam),
+            chessGame.GetDisplayedCommandPoints(localTeam),
             0f,
             maximum);
         float normalized = current / maximum;
@@ -254,7 +289,7 @@ public sealed class SessionManager : MonoBehaviour
 
         GUI.Label(
             new Rect(panel.x + 24f, panel.y + 91f, panel.width - 48f, 32f),
-            $"({current:0.#}/{maximum:0.#})",
+            $"({current:0.##}/{maximum:0.##})",
             _subtitle);
     }
 
@@ -787,12 +822,12 @@ public sealed class SessionManager : MonoBehaviour
             _session = await MultiplayerService.Instance.CreateSessionAsync(options);
             _screen = ScreenView.Lobby;
             SetStatus($"Server created. Share code {_session.Code} with your team.");
-            Debug.Log($"Session created: {_session.Id} / {_session.Code}");
+            // Debug.Log($"Session created: {_session.Id} / {_session.Code}");
         }
         catch (Exception exception)
         {
             SetStatus($"Server creation failed: {exception.Message}", true);
-            Debug.LogException(exception);
+            // Debug.LogException(exception);
         }
         finally
         {
@@ -811,12 +846,12 @@ public sealed class SessionManager : MonoBehaviour
             _session = await MultiplayerService.Instance.JoinSessionByCodeAsync(_joinCode);
             _screen = ScreenView.Lobby;
             SetStatus($"Joined {_session.Name}.");
-            Debug.Log($"Session joined by code: {_session.Id} / {_session.Code}");
+            // Debug.Log($"Session joined by code: {_session.Id} / {_session.Code}");
         }
         catch (Exception exception)
         {
             SetStatus($"Could not join that room: {exception.Message}", true);
-            Debug.LogException(exception);
+            // Debug.LogException(exception);
         }
         finally
         {
@@ -835,12 +870,12 @@ public sealed class SessionManager : MonoBehaviour
             _session = await MultiplayerService.Instance.JoinSessionByIdAsync(sessionId);
             _screen = ScreenView.Lobby;
             SetStatus($"Joined {sessionName}.");
-            Debug.Log($"Session joined from browser: {_session.Id} / {_session.Code}");
+            // Debug.Log($"Session joined from browser: {_session.Id} / {_session.Code}");
         }
         catch (Exception exception)
         {
             SetStatus($"Could not join {sessionName}: {exception.Message}", true);
-            Debug.LogException(exception);
+            // Debug.LogException(exception);
         }
         finally
         {
@@ -867,7 +902,7 @@ public sealed class SessionManager : MonoBehaviour
         catch (Exception exception)
         {
             SetStatus($"Server search failed: {exception.Message}", true);
-            Debug.LogException(exception);
+            // Debug.LogException(exception);
         }
         finally
         {
@@ -898,7 +933,7 @@ public sealed class SessionManager : MonoBehaviour
         catch (Exception exception)
         {
             SetStatus($"Could not leave the room: {exception.Message}", true);
-            Debug.LogException(exception);
+            // Debug.LogException(exception);
         }
         finally
         {

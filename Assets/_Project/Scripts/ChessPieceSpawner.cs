@@ -149,9 +149,10 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     private GameObject voiceSelectionMarker;
     private Material voiceSelectionMaterial;
     private int voiceSelectionPieceId = -1;
-    private GameObject confirmedVoiceSelectionMarker;
-    private Material confirmedVoiceSelectionMaterial;
-    private int confirmedVoiceSelectionPieceId = -1;
+    private readonly GameObject[] confirmedVoiceSelectionMarkers = new GameObject[3];
+    private readonly Material[] confirmedVoiceSelectionMaterials = new Material[3];
+    private readonly int[] confirmedVoiceSelectionPieceIds =
+        { -1, -1, -1 };
     private GameObject voiceCommandMarker;
     private Material voiceCommandMaterial;
     private int voiceCommandPieceId = -1;
@@ -165,6 +166,30 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     public float RankSpacing => rankSpacing;
     public float GroundMinimumCoordinate => -0.5f - boardBorderWidthInSquares;
     public float GroundMaximumCoordinate => 7.5f + boardBorderWidthInSquares;
+
+    public GameObject GetKingPrefab(PlayerTeam team)
+    {
+        return GetPiecePrefab(team, ChessPieceType.King);
+    }
+
+    public Quaternion GetPieceWorldRotation(
+        PlayerTeam team,
+        GameObject prefab,
+        float heading)
+    {
+        if (prefab == null)
+        {
+            return PlacementRotation;
+        }
+
+        Vector3 rotationOffset = team == PlayerTeam.White
+            ? whiteRotationOffset
+            : blackRotationOffset;
+        return PlacementRotation *
+               Quaternion.Euler(0f, heading, 0f) *
+               Quaternion.Euler(rotationOffset) *
+               prefab.transform.rotation;
+    }
 
     private void Awake()
     {
@@ -238,9 +263,9 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
         if (!whitePieces.HasAnyPrefab && !blackPieces.HasAnyPrefab)
         {
-            Debug.LogWarning(
-                $"{nameof(ChessPieceSpawner)} on '{name}' has no chess piece prefabs assigned.",
-                this);
+            // Debug.LogWarning(
+            //     $"{nameof(ChessPieceSpawner)} on '{name}' has no chess piece prefabs assigned.",
+            //     this);
             return;
         }
 
@@ -577,12 +602,31 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
     public void SetConfirmedVoiceSelectionTarget(ushort? pieceId)
     {
-        confirmedVoiceSelectionPieceId = pieceId.HasValue ? pieceId.Value : -1;
-
-        if (confirmedVoiceSelectionPieceId < 0 &&
-            confirmedVoiceSelectionMarker != null)
+        if (pieceId.HasValue)
         {
-            confirmedVoiceSelectionMarker.SetActive(false);
+            SetConfirmedVoiceSelectionTargets(new[] { pieceId.Value });
+        }
+        else
+        {
+            SetConfirmedVoiceSelectionTargets(Array.Empty<ushort>());
+        }
+    }
+
+    public void SetConfirmedVoiceSelectionTargets(
+        IReadOnlyList<ushort> pieceIds)
+    {
+        for (int index = 0; index < confirmedVoiceSelectionPieceIds.Length; index++)
+        {
+            confirmedVoiceSelectionPieceIds[index] =
+                pieceIds != null && index < pieceIds.Count
+                    ? pieceIds[index]
+                    : -1;
+
+            if (confirmedVoiceSelectionPieceIds[index] < 0 &&
+                confirmedVoiceSelectionMarkers[index] != null)
+            {
+                confirmedVoiceSelectionMarkers[index].SetActive(false);
+            }
         }
     }
 
@@ -1131,14 +1175,17 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             voiceHoverMarkerColor,
             0.46f,
             0.025f);
-        UpdateVoiceTargetMarker(
-            ref confirmedVoiceSelectionMarker,
-            ref confirmedVoiceSelectionMaterial,
-            confirmedVoiceSelectionPieceId,
-            "Confirmed Voice Selection",
-            confirmedVoiceMarkerColor,
-            0.5f,
-            0.035f);
+        for (int index = 0; index < confirmedVoiceSelectionPieceIds.Length; index++)
+        {
+            UpdateVoiceTargetMarker(
+                ref confirmedVoiceSelectionMarkers[index],
+                ref confirmedVoiceSelectionMaterials[index],
+                confirmedVoiceSelectionPieceIds[index],
+                $"Confirmed Voice Selection {index + 1}",
+                confirmedVoiceMarkerColor,
+                0.5f,
+                0.035f);
+        }
         UpdateVoiceTargetMarker(
             ref voiceCommandMarker,
             ref voiceCommandMaterial,
@@ -1213,14 +1260,10 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         GameObject prefab,
         NetworkChessPieceState pieceState)
     {
-        Vector3 rotationOffset = pieceState.OwnerTeam == PlayerTeam.White
-            ? whiteRotationOffset
-            : blackRotationOffset;
-
-        Quaternion rotation = PlacementRotation *
-                              Quaternion.Euler(0f, pieceState.VoiceHeading, 0f) *
-                              Quaternion.Euler(rotationOffset) *
-                              prefab.transform.rotation;
+        Quaternion rotation = GetPieceWorldRotation(
+            pieceState.OwnerTeam,
+            prefab,
+            pieceState.VoiceHeading);
         float fallProgress = GetRingOutProgress(pieceState, out Vector2 outwardDirection);
 
         if (fallProgress <= 0f)
@@ -1320,9 +1363,12 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             Destroy(voiceSelectionMaterial);
         }
 
-        if (confirmedVoiceSelectionMaterial != null)
+        foreach (Material material in confirmedVoiceSelectionMaterials)
         {
-            Destroy(confirmedVoiceSelectionMaterial);
+            if (material != null)
+            {
+                Destroy(material);
+            }
         }
 
         if (voiceCommandMaterial != null)
@@ -1391,6 +1437,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         {
             if (placement == null ||
                 !placement.Enabled ||
+                !configuration.ShouldSpawnBoardPiece(placement) ||
                 placement.PieceType == ChessPieceType.None ||
                 (placement.Team != PlayerTeam.White &&
                  placement.Team != PlayerTeam.Black))

@@ -18,6 +18,14 @@ public enum VoiceCommandVersion : byte
     ConfirmedSelectionCharge
 }
 
+public enum CostConsumptionVersion : byte
+{
+    [InspectorName("구버전 - 명령별 고정 코스트")]
+    FixedPerCommand,
+    [InspectorName("신버전 - 발화 시간 비례 코스트")]
+    VoiceDurationCharge
+}
+
 public enum MatchClockMode : byte
 {
     Unlimited,
@@ -74,10 +82,18 @@ public enum PieceMovementControl : byte
 
 public enum CaptureScoringRule : byte
 {
-    [InspectorName("Periodic Score Per Piece")]
+    [InspectorName("초당 기물별 점수")]
     PeriodicPerPiece,
-    [InspectorName("Final Occupancy Piece Value")]
+    [InspectorName("종료 시 기물 가치 합산")]
     FinalOccupancyValue
+}
+
+public enum CaptureModeVersion : byte
+{
+    [InspectorName("구버전 - 고정 점령 원")]
+    LegacyConfiguredZones,
+    [InspectorName("신버전 - 랜덤 라운드 점령전")]
+    RandomRoundControl
 }
 
 public enum PieceSelectionMouseButton : byte
@@ -116,6 +132,9 @@ public sealed class CommandEconomySettings
     [Header("음성 명령 버전")]
     [SerializeField] private VoiceCommandVersion voiceCommandVersion =
         VoiceCommandVersion.LegacyLookSelection;
+    [InspectorName("최대 확정 선택 기물 수")]
+    [Tooltip("신규 명령 방식에서 동시에 확정 선택할 수 있는 기물 수입니다.")]
+    [SerializeField, Range(1, 3)] private int maximumConfirmedSelections = 3;
 
     [Header("교대 턴제")]
     [SerializeField] private PlayerTeam firstTeam = PlayerTeam.White;
@@ -136,6 +155,43 @@ public sealed class CommandEconomySettings
     [Tooltip("Cost restored on each recharge tick.")]
     [SerializeField, Min(0f)] private float rechargeAmount = 1f;
 
+    [Header("코스트 소모 버전")]
+    [SerializeField] private CostConsumptionVersion costConsumptionVersion =
+        CostConsumptionVersion.FixedPerCommand;
+
+    [Header("신규 코스트 방식 - 발화 시간")]
+    [Tooltip("발화 중 코스트가 한 번 줄어들 때의 단위입니다. 0.1이나 0.01처럼 설정할 수 있습니다.")]
+    [SerializeField, Min(0.001f)] private float voiceChargeCostStep = 0.05f;
+    [Tooltip("위 코스트 단위가 소모되는 시간 간격입니다.")]
+    [SerializeField, Min(0.01f)] private float voiceChargeSecondsPerCostStep = 0.05f;
+    [Tooltip("코스트와 돌진 세기 계산에 사용할 최대 유효 발화 시간입니다.")]
+    [SerializeField, Min(0.1f)] private float voiceChargeMaximumDurationSeconds = 3f;
+
+    [Header("신규 돌진 - 거리 판정")]
+    [SerializeField, Min(0f)] private float voiceChargeMinimumDistanceInSquares = 0.75f;
+    [SerializeField, Min(0.01f)] private float voiceChargeMaximumDistanceInSquares = 8f;
+    [Tooltip("최대 음량으로 말하기 시작했을 때 최소 거리에 즉시 더해지는 거리입니다. 이후 발화 시간에 따라 최대 거리까지 계속 증가합니다.")]
+    [SerializeField, Min(0f)] private float voiceChargeMaximumInitialLoudnessDistanceInSquares = 1f;
+    [Tooltip("돌진이 시간에 따라 충전되는 기본 비중입니다. 이 값이 클수록 작은 목소리도 발화 길이만큼 안정적으로 충전됩니다.")]
+    [SerializeField, Min(0f)] private float voiceChargeDurationWeight = 0.4f;
+    [Tooltip("발화 시간 충전 곡선입니다. 1은 선형, 1보다 작으면 초반에 빠르게 자라고, 1보다 크면 후반에 빠르게 자랍니다.")]
+    [SerializeField, Min(0.05f)] private float voiceChargeDurationExponent = 0.6f;
+    [Tooltip("목소리 크기가 충전 효율에 미치는 비중입니다. 음량은 즉시 거리를 더하지 않고 말하는 동안의 충전 효율을 높입니다.")]
+    [SerializeField, Min(0f)] private float voiceChargeLoudnessWeight = 0.35f;
+    [Tooltip("돌진용 음량 곡선입니다. 1은 선형이며, 1보다 높이면 작은 목소리를 더 약하게 판정하면서 최대 음량은 그대로 유지합니다.")]
+    [SerializeField, Min(0.01f)] private float voiceChargeLoudnessExponent = 1.75f;
+    [Tooltip("발음 정확도가 충전 거리를 얼마나 강하게 감점할지 정합니다. 0이면 거리에 영향이 없고, 1이면 발음 점수를 그대로 곱합니다.")]
+    [SerializeField, Range(0f, 1f)] private float voiceChargePronunciationWeight = 0.25f;
+    [Tooltip("발음 정확도 안에서 Azure 음성 신뢰도가 차지하는 비중입니다.")]
+    [SerializeField, Range(0f, 1f)] private float voiceChargeAzureConfidenceWeight = 0.6f;
+
+    [Header("신규 돌진 - 실시간 화살표")]
+    [SerializeField, Min(0.002f)] private float voiceChargeArrowWidthInSquares = 0.055f;
+    [SerializeField, Min(0.005f)] private float voiceChargeArrowHeightInSquares = 0.12f;
+    [SerializeField, Range(0.05f, 0.8f)] private float voiceChargeArrowHeadLengthRatio = 0.2f;
+    [SerializeField] private Color voiceChargeArrowColor =
+        new(1f, 0.42f, 0.05f, 0.95f);
+
     [Header("명령별 코스트")]
     [FormerlySerializedAs("movementCommandCost")]
     [SerializeField, Min(0f)] private float moveForwardCost = 1f;
@@ -154,9 +210,13 @@ public sealed class CommandEconomySettings
     [FormerlySerializedAs("skillCommandCost")]
     [SerializeField, Min(0f)] private float primarySkillCost = 2f;
     [SerializeField, Min(0f)] private float secondarySkillCost = 2f;
-    [SerializeField, Min(0f)] private float chargeCost = 1f;
+    [InspectorName("돌진 최소 코스트")]
+    [Tooltip("돌진 한 번의 최소 코스트입니다. 1보다 낮게 설정할 수 없습니다.")]
+    [SerializeField, Min(1f)] private float chargeCost = 1f;
 
     [Header("신규 명령 방식 - 돌진 레이저")]
+    [Tooltip("레이캐스트 판정은 항상 유지됩니다. 이 옵션은 명령 확정 순간 카메라에서 목표까지 보이는 레이저 선만 표시합니다.")]
+    [SerializeField] private bool showChargeRaycastLaser;
     [Tooltip("Maximum distance of the aiming laser, measured in board squares.")]
     [SerializeField, Min(1f)] private float chargeLaserRangeInSquares = 30f;
     [SerializeField, Min(0.01f)] private float chargeLaserVisibleSeconds = 0.2f;
@@ -170,6 +230,11 @@ public sealed class CommandEconomySettings
         ? CommandIssuingMode.RealTime
         : mode;
     public VoiceCommandVersion VoiceCommandVersion => voiceCommandVersion;
+    public int MaximumConfirmedSelections =>
+        Mathf.Clamp(maximumConfirmedSelections, 1, 3);
+    public CostConsumptionVersion CostConsumptionVersion => costConsumptionVersion;
+    public bool UsesVoiceDurationCost =>
+        costConsumptionVersion == CostConsumptionVersion.VoiceDurationCharge;
     public bool CostSystemEnabled => costSystemEnabled ||
         UsesLegacyRegeneratingPointsMode;
     public PlayerTeam FirstTeam =>
@@ -181,8 +246,36 @@ public sealed class CommandEconomySettings
     public float MaximumCost => Mathf.Max(0.01f, maximumCost);
     public float RechargeIntervalSeconds => Mathf.Max(0.01f, rechargeIntervalSeconds);
     public float RechargeAmount => Mathf.Max(0f, rechargeAmount);
+    public float VoiceChargeCostStep => Mathf.Max(0.001f, voiceChargeCostStep);
+    public float VoiceChargeSecondsPerCostStep =>
+        Mathf.Max(0.01f, voiceChargeSecondsPerCostStep);
+    public float VoiceChargeMaximumDurationSeconds =>
+        Mathf.Max(0.1f, voiceChargeMaximumDurationSeconds);
+    public float VoiceChargeMinimumDistanceInSquares =>
+        Mathf.Max(0f, voiceChargeMinimumDistanceInSquares);
+    public float VoiceChargeMaximumDistanceInSquares => Mathf.Max(
+        VoiceChargeMinimumDistanceInSquares + 0.01f,
+        voiceChargeMaximumDistanceInSquares);
+    public float VoiceChargeMaximumInitialLoudnessDistanceInSquares =>
+        Mathf.Clamp(
+            voiceChargeMaximumInitialLoudnessDistanceInSquares,
+            0f,
+            VoiceChargeMaximumDistanceInSquares -
+            VoiceChargeMinimumDistanceInSquares);
+    public float VoiceChargeLoudnessExponent =>
+        Mathf.Max(0.01f, voiceChargeLoudnessExponent);
+    public float VoiceChargeDurationExponent =>
+        Mathf.Max(0.05f, voiceChargeDurationExponent);
+    public float VoiceChargeArrowWidthInSquares =>
+        Mathf.Max(0.002f, voiceChargeArrowWidthInSquares);
+    public float VoiceChargeArrowHeightInSquares =>
+        Mathf.Max(0.005f, voiceChargeArrowHeightInSquares);
+    public float VoiceChargeArrowHeadLengthRatio =>
+        Mathf.Clamp(voiceChargeArrowHeadLengthRatio, 0.05f, 0.8f);
+    public Color VoiceChargeArrowColor => voiceChargeArrowColor;
     public float ChargeLaserRangeInSquares =>
         Mathf.Max(1f, chargeLaserRangeInSquares);
+    public bool ShowChargeRaycastLaser => showChargeRaycastLaser;
     public float ChargeLaserVisibleSeconds =>
         Mathf.Max(0.01f, chargeLaserVisibleSeconds);
     public float ChargeLaserWidthInSquares =>
@@ -206,9 +299,93 @@ public sealed class CommandEconomySettings
             PieceVoiceCommand.Stop => stopCost,
             PieceVoiceCommand.SkillPrimary => primarySkillCost,
             PieceVoiceCommand.SkillSecondary => secondarySkillCost,
-            PieceVoiceCommand.Charge => chargeCost,
+            PieceVoiceCommand.Charge => Mathf.Max(1f, chargeCost),
             _ => 0f
         };
+    }
+
+    public float GetVoiceChargeCost(
+        float voicedDurationSeconds,
+        int selectedPieceCount = 1)
+    {
+        float duration = Mathf.Min(
+            Mathf.Max(0f, voicedDurationSeconds),
+            VoiceChargeMaximumDurationSeconds);
+        int steps = duration > 0f
+            ? Mathf.CeilToInt(duration / VoiceChargeSecondsPerCostStep)
+            : 0;
+        float durationCostPerPiece = Mathf.Min(
+            MaximumCost,
+            steps * VoiceChargeCostStep);
+        float durationCost = Mathf.Min(
+            MaximumCost,
+            durationCostPerPiece * Mathf.Max(1, selectedPieceCount));
+        return Mathf.Max(GetBaseCost(PieceVoiceCommand.Charge), durationCost);
+    }
+
+    public float GetVoiceChargePronunciationScore(
+        float azureConfidence,
+        float textSimilarity)
+    {
+        float azureWeight = Mathf.Clamp01(voiceChargeAzureConfidenceWeight);
+        return Mathf.Clamp01(Mathf.Lerp(
+            textSimilarity,
+            azureConfidence,
+            azureWeight));
+    }
+
+    public float GetVoiceChargePower(
+        float voicedDurationSeconds,
+        float normalizedLoudness,
+        float pronunciationScore)
+    {
+        float durationScore = Mathf.Pow(
+            Mathf.Clamp01(
+                voicedDurationSeconds / VoiceChargeMaximumDurationSeconds),
+            VoiceChargeDurationExponent);
+        float durationWeight = Mathf.Max(0f, voiceChargeDurationWeight);
+        float loudnessWeight = Mathf.Max(0f, voiceChargeLoudnessWeight);
+        float chargeWeight = durationWeight + loudnessWeight;
+
+        if (chargeWeight <= 0.0001f)
+        {
+            return 0f;
+        }
+
+        float normalizedLoudnessValue = Mathf.Pow(
+            Mathf.Clamp01(normalizedLoudness),
+            VoiceChargeLoudnessExponent);
+        float distanceRange = VoiceChargeMaximumDistanceInSquares -
+            VoiceChargeMinimumDistanceInSquares;
+        float maximumInitialPower = distanceRange > 0.0001f
+            ? VoiceChargeMaximumInitialLoudnessDistanceInSquares / distanceRange
+            : 0f;
+        float initialLoudnessPower = normalizedLoudnessValue * maximumInitialPower;
+
+        // Loudness provides a bounded initial hit, then also controls how
+        // efficiently elapsed speech time fills the remaining distance.
+        float loudnessEfficiency =
+            (durationWeight +
+             normalizedLoudnessValue * loudnessWeight) /
+            chargeWeight;
+        float durationPower = durationScore * loudnessEfficiency;
+        float chargePower = initialLoudnessPower +
+            (1f - initialLoudnessPower) * durationPower;
+        float pronunciationImpact = Mathf.Clamp01(
+            voiceChargePronunciationWeight);
+        float pronunciationMultiplier = Mathf.Lerp(
+            1f,
+            Mathf.Clamp01(pronunciationScore),
+            pronunciationImpact);
+        return Mathf.Clamp01(chargePower * pronunciationMultiplier);
+    }
+
+    public float GetVoiceChargeDistance(float chargePower)
+    {
+        return Mathf.Lerp(
+            VoiceChargeMinimumDistanceInSquares,
+            VoiceChargeMaximumDistanceInSquares,
+            Mathf.Clamp01(chargePower));
     }
 
     public void Validate()
@@ -217,6 +394,11 @@ public sealed class CommandEconomySettings
         {
             firstTeam = PlayerTeam.White;
         }
+
+        maximumConfirmedSelections = Mathf.Clamp(
+            maximumConfirmedSelections,
+            1,
+            3);
 
         if (UsesLegacyRegeneratingPointsMode)
         {
@@ -230,6 +412,46 @@ public sealed class CommandEconomySettings
         startingCost = Mathf.Clamp(startingCost, 0f, maximumCost);
         rechargeIntervalSeconds = Mathf.Max(0.01f, rechargeIntervalSeconds);
         rechargeAmount = Mathf.Max(0f, rechargeAmount);
+        voiceChargeCostStep = Mathf.Max(0.001f, voiceChargeCostStep);
+        voiceChargeSecondsPerCostStep = Mathf.Max(
+            0.01f,
+            voiceChargeSecondsPerCostStep);
+        voiceChargeMaximumDurationSeconds = Mathf.Max(
+            0.1f,
+            voiceChargeMaximumDurationSeconds);
+        voiceChargeMinimumDistanceInSquares = Mathf.Max(
+            0f,
+            voiceChargeMinimumDistanceInSquares);
+        voiceChargeMaximumDistanceInSquares = Mathf.Max(
+            voiceChargeMinimumDistanceInSquares + 0.01f,
+            voiceChargeMaximumDistanceInSquares);
+        voiceChargeMaximumInitialLoudnessDistanceInSquares = Mathf.Clamp(
+            voiceChargeMaximumInitialLoudnessDistanceInSquares,
+            0f,
+            voiceChargeMaximumDistanceInSquares -
+            voiceChargeMinimumDistanceInSquares);
+        voiceChargeDurationWeight = Mathf.Max(0f, voiceChargeDurationWeight);
+        voiceChargeDurationExponent = Mathf.Max(
+            0.05f,
+            voiceChargeDurationExponent);
+        voiceChargeLoudnessWeight = Mathf.Max(0f, voiceChargeLoudnessWeight);
+        voiceChargeLoudnessExponent = Mathf.Max(
+            0.01f,
+            voiceChargeLoudnessExponent);
+        voiceChargePronunciationWeight = Mathf.Clamp01(
+            voiceChargePronunciationWeight);
+        voiceChargeAzureConfidenceWeight = Mathf.Clamp01(
+            voiceChargeAzureConfidenceWeight);
+        voiceChargeArrowWidthInSquares = Mathf.Max(
+            0.002f,
+            voiceChargeArrowWidthInSquares);
+        voiceChargeArrowHeightInSquares = Mathf.Max(
+            0.005f,
+            voiceChargeArrowHeightInSquares);
+        voiceChargeArrowHeadLengthRatio = Mathf.Clamp(
+            voiceChargeArrowHeadLengthRatio,
+            0.05f,
+            0.8f);
         moveForwardCost = Mathf.Max(0f, moveForwardCost);
         moveBackwardCost = Mathf.Max(0f, moveBackwardCost);
         moveLeftCost = Mathf.Max(0f, moveLeftCost);
@@ -243,7 +465,7 @@ public sealed class CommandEconomySettings
         stopCost = Mathf.Max(0f, stopCost);
         primarySkillCost = Mathf.Max(0f, primarySkillCost);
         secondarySkillCost = Mathf.Max(0f, secondarySkillCost);
-        chargeCost = Mathf.Max(0f, chargeCost);
+        chargeCost = Mathf.Max(1f, chargeCost);
         chargeLaserRangeInSquares = Mathf.Max(1f, chargeLaserRangeInSquares);
         chargeLaserVisibleSeconds = Mathf.Max(0.01f, chargeLaserVisibleSeconds);
         chargeLaserWidthInSquares = Mathf.Max(0.002f, chargeLaserWidthInSquares);
@@ -567,28 +789,162 @@ public sealed class CaptureZoneSettings
 [Serializable]
 public sealed class CaptureModeSettings
 {
-    [Tooltip("Master switch. When disabled, no circle is drawn and no capture score is evaluated.")]
+    [Header("공통 스위치")]
+    [Tooltip("끄면 점령 원, 점령 점수 계산, 점령전 승리 판정을 모두 사용하지 않습니다.")]
     [SerializeField] private bool enabled;
+    [Tooltip("고정 원 점수 방식과 랜덤 라운드 점령전 중에서 선택합니다.")]
+    [SerializeField] private CaptureModeVersion version =
+        CaptureModeVersion.LegacyConfiguredZones;
+
+    [Header("구버전 - 고정 점령 원")]
     [SerializeField] private CaptureScoringRule scoringRule =
         CaptureScoringRule.PeriodicPerPiece;
-    [Tooltip("At the match time limit, use capture score instead of the clock's normal resolution rule.")]
+    [Tooltip("제한 시간이 끝났을 때 기본 시간 종료 규칙 대신 점령 점수로 승자를 정합니다.")]
     [SerializeField] private bool resolveWinnerAtTimeLimit = true;
-    [Tooltip("Periodic rule: leaving a circle discards that piece's partial interval. Otherwise it resumes when the piece returns.")]
+    [Tooltip("초당 점수 규칙에서 기물이 원 밖으로 나가면 진행 중이던 개별 타이머를 초기화합니다.")]
     [SerializeField] private bool resetPeriodicTimerWhenLeaving = true;
     [SerializeField] private List<CaptureZoneSettings> zones = new()
     {
         new CaptureZoneSettings()
     };
 
+    [Header("신버전 - 랜덤 라운드 규칙")]
+    [Tooltip("한 점령 원을 보여준 뒤 판정할 때까지의 시간입니다.")]
+    [SerializeField, Min(0.1f)] private float randomRoundDurationSeconds = 5f;
+    [Tooltip("한 라운드 판정 후 다음 미리보기 원이 나타날 때까지의 시간입니다. 0이면 즉시 이어집니다.")]
+    [SerializeField, Min(0f)] private float randomRoundIntervalSeconds = 0.35f;
+    [Tooltip("이 점수에 먼저 도달한 팀이 즉시 승리합니다.")]
+    [SerializeField, Min(1)] private int randomRoundScoreToWin = 3;
+    [Tooltip("랜덤 점령 원의 최소 반지름입니다. 체스 칸 단위입니다.")]
+    [SerializeField, Min(0.05f)] private float randomRadiusMinimumInSquares = 1.15f;
+    [Tooltip("랜덤 점령 원의 최대 반지름입니다. 최소 반지름과 같게 두면 크기가 고정됩니다.")]
+    [SerializeField, Min(0.05f)] private float randomRadiusMaximumInSquares = 1.15f;
+    [Tooltip("점령 원이 보드 외곽에서 추가로 떨어질 여백입니다. 체스 칸 단위입니다.")]
+    [SerializeField, Min(0f)] private float randomPositionPaddingInSquares;
+    [Tooltip("켜면 원 전체가 보드 안에 들어오도록 반지름만큼 가장자리를 제외합니다. 끄면 원의 중심이 가장자리와 코너를 포함한 보드 전체에서 생성됩니다.")]
+    [SerializeField] private bool randomKeepEntireCircleInsideBoard;
+    [Tooltip("직전 원과 강제로 떨어뜨릴 최소 거리입니다. 진짜 독립 균등 랜덤을 원하면 0으로 둡니다. 값이 크면 두 구역을 오가는 것처럼 느껴질 수 있습니다.")]
+    [SerializeField, Min(0f)] private float randomMinimumCentreDistanceInSquares;
+    [Tooltip("거리까지 거의 같은 상황을 무승부로 볼 오차 범위입니다.")]
+    [SerializeField, Min(0f)] private float randomDistanceTieToleranceInSquares = 0.001f;
+    [Tooltip("0이면 매 경기 무작위입니다. 0이 아닌 값은 같은 랜덤 배치를 재현하는 테스트용 시드입니다.")]
+    [SerializeField] private int randomSeed;
+
+    [Header("신버전 - 미리보기 원 표시")]
+    [SerializeField] private bool randomShowFilledCircle = true;
+    [SerializeField] private Color randomFillColor =
+        new(0.1f, 0.75f, 1f, 0.1f);
+    [Tooltip("아직 차오르지 않은 원 테두리의 색입니다.")]
+    [SerializeField] private Color randomFaintOutlineColor =
+        new(0.15f, 0.9f, 1f, 0.22f);
+    [Tooltip("0%에서 100%까지 차오르는 진한 테두리의 색입니다.")]
+    [SerializeField] private Color randomProgressOutlineColor =
+        new(0.15f, 0.9f, 1f, 0.98f);
+    [SerializeField, Range(16, 128)] private int randomCircleSegments = 96;
+    [SerializeField, Min(0.005f)] private float randomOutlineWidthInSquares = 0.055f;
+    [SerializeField, Min(0f)] private float randomHeightOffsetInSquares = 0.02f;
+    [Tooltip("진한 게이지가 차기 시작하는 각도입니다. -90은 화면 기준 위쪽에서 시작합니다.")]
+    [SerializeField, Range(-180f, 180f)] private float randomProgressStartAngleDegrees = -90f;
+
+    [Header("점령전 - 킹 부활")]
+    [Tooltip("점령전에서는 킹 사망으로 경기를 끝내지 않고 지정 시간이 지난 뒤 부활시킵니다.")]
+    [SerializeField] private bool respawnEliminatedKings = true;
+    [Tooltip("킹 사망 후 다시 나타날 때까지의 시간입니다.")]
+    [SerializeField, Min(0.1f)] private float kingRespawnDelaySeconds = 10f;
+    [Tooltip("랜덤 부활 위치를 보드 가장자리에서 이만큼 안쪽으로 제한합니다. 체스 칸 단위입니다.")]
+    [SerializeField, Range(0f, 3.49f)] private float kingRespawnEdgePaddingInSquares = 0.35f;
+    [Tooltip("다른 기물이나 플레이어와 겹치지 않도록 확보하려는 추가 거리입니다. 공간이 부족하면 가장 덜 겹치는 후보를 사용합니다.")]
+    [SerializeField, Min(0f)] private float kingRespawnClearanceInSquares = 0.15f;
+    [Tooltip("죽어 있는 동안 보드를 수직으로 내려다보는 카메라 높이입니다. 체스 칸 단위입니다.")]
+    [SerializeField, Min(1f)] private float kingRespawnCameraHeightInSquares = 10f;
+    [Tooltip("화면 중앙에 표시하는 부활 카운트다운 숫자의 크기입니다.")]
+    [SerializeField, Range(24, 240)] private int kingRespawnCountdownFontSize = 112;
+    [SerializeField] private Color kingRespawnCountdownColor = Color.white;
+
     public bool Enabled => enabled;
+    public CaptureModeVersion Version => version;
     public CaptureScoringRule ScoringRule => scoringRule;
     public bool ResolveWinnerAtTimeLimit => resolveWinnerAtTimeLimit;
     public bool ResetPeriodicTimerWhenLeaving => resetPeriodicTimerWhenLeaving;
     public IReadOnlyList<CaptureZoneSettings> Zones => zones;
+    public float RandomRoundDurationSeconds =>
+        Mathf.Max(0.1f, randomRoundDurationSeconds);
+    public float RandomRoundIntervalSeconds =>
+        Mathf.Max(0f, randomRoundIntervalSeconds);
+    public int RandomRoundScoreToWin => Mathf.Max(1, randomRoundScoreToWin);
+    public float RandomRadiusMinimumInSquares =>
+        Mathf.Max(0.05f, Mathf.Min(
+            randomRadiusMinimumInSquares,
+            randomRadiusMaximumInSquares));
+    public float RandomRadiusMaximumInSquares =>
+        Mathf.Max(RandomRadiusMinimumInSquares, randomRadiusMaximumInSquares);
+    public float RandomPositionPaddingInSquares =>
+        Mathf.Max(0f, randomPositionPaddingInSquares);
+    public bool RandomKeepEntireCircleInsideBoard =>
+        randomKeepEntireCircleInsideBoard;
+    public float RandomMinimumCentreDistanceInSquares =>
+        Mathf.Max(0f, randomMinimumCentreDistanceInSquares);
+    public float RandomDistanceTieToleranceInSquares =>
+        Mathf.Max(0f, randomDistanceTieToleranceInSquares);
+    public int RandomSeed => randomSeed;
+    public bool RandomShowFilledCircle => randomShowFilledCircle;
+    public Color RandomFillColor => randomFillColor;
+    public Color RandomFaintOutlineColor => randomFaintOutlineColor;
+    public Color RandomProgressOutlineColor => randomProgressOutlineColor;
+    public int RandomCircleSegments => Mathf.Clamp(randomCircleSegments, 16, 128);
+    public float RandomOutlineWidthInSquares =>
+        Mathf.Max(0.005f, randomOutlineWidthInSquares);
+    public float RandomHeightOffsetInSquares =>
+        Mathf.Max(0f, randomHeightOffsetInSquares);
+    public float RandomProgressStartAngleDegrees => randomProgressStartAngleDegrees;
+    public bool RespawnEliminatedKings => respawnEliminatedKings;
+    public float KingRespawnDelaySeconds =>
+        Mathf.Max(0.1f, kingRespawnDelaySeconds);
+    public float KingRespawnEdgePaddingInSquares =>
+        Mathf.Clamp(kingRespawnEdgePaddingInSquares, 0f, 3.49f);
+    public float KingRespawnClearanceInSquares =>
+        Mathf.Max(0f, kingRespawnClearanceInSquares);
+    public float KingRespawnCameraHeightInSquares =>
+        Mathf.Max(1f, kingRespawnCameraHeightInSquares);
+    public int KingRespawnCountdownFontSize =>
+        Mathf.Clamp(kingRespawnCountdownFontSize, 24, 240);
+    public Color KingRespawnCountdownColor => kingRespawnCountdownColor;
 
     public void Validate()
     {
         zones ??= new List<CaptureZoneSettings>();
+
+        randomRoundDurationSeconds = Mathf.Max(0.1f, randomRoundDurationSeconds);
+        randomRoundIntervalSeconds = Mathf.Max(0f, randomRoundIntervalSeconds);
+        randomRoundScoreToWin = Mathf.Max(1, randomRoundScoreToWin);
+        randomRadiusMinimumInSquares =
+            Mathf.Max(0.05f, randomRadiusMinimumInSquares);
+        randomRadiusMaximumInSquares = Mathf.Max(
+            randomRadiusMinimumInSquares,
+            randomRadiusMaximumInSquares);
+        randomPositionPaddingInSquares =
+            Mathf.Max(0f, randomPositionPaddingInSquares);
+        randomMinimumCentreDistanceInSquares =
+            Mathf.Max(0f, randomMinimumCentreDistanceInSquares);
+        randomDistanceTieToleranceInSquares =
+            Mathf.Max(0f, randomDistanceTieToleranceInSquares);
+        randomCircleSegments = Mathf.Clamp(randomCircleSegments, 16, 128);
+        randomOutlineWidthInSquares =
+            Mathf.Max(0.005f, randomOutlineWidthInSquares);
+        randomHeightOffsetInSquares = Mathf.Max(0f, randomHeightOffsetInSquares);
+        kingRespawnDelaySeconds = Mathf.Max(0.1f, kingRespawnDelaySeconds);
+        kingRespawnEdgePaddingInSquares = Mathf.Clamp(
+            kingRespawnEdgePaddingInSquares,
+            0f,
+            3.49f);
+        kingRespawnClearanceInSquares =
+            Mathf.Max(0f, kingRespawnClearanceInSquares);
+        kingRespawnCameraHeightInSquares =
+            Mathf.Max(1f, kingRespawnCameraHeightInSquares);
+        kingRespawnCountdownFontSize = Mathf.Clamp(
+            kingRespawnCountdownFontSize,
+            24,
+            240);
 
         foreach (CaptureZoneSettings zone in zones)
         {
@@ -609,6 +965,32 @@ public sealed class PlayerCommanderSettings
     [SerializeField] private Color whiteAvatarColor = new(0.92f, 0.95f, 1f, 1f);
     [SerializeField] private Color blackAvatarColor = new(0.08f, 0.12f, 0.2f, 1f);
     [SerializeField] private Color unassignedAvatarColor = new(0.45f, 0.5f, 0.55f, 1f);
+
+    [Header("플레이어 킹 시작 위치와 시점")]
+    [Tooltip("켜면 초기 기물 배치에 등록된 자기 팀 킹의 칸에서 시작합니다.")]
+    [SerializeField] private bool useBoardKingPlacementAsPlayerStart = true;
+    [Tooltip("초기 배치에서 흰색 킹을 찾지 못했을 때 사용할 보드 좌표입니다.")]
+    [SerializeField] private Vector2 whitePlayerKingFallbackStart = new(4f, 0f);
+    [Tooltip("초기 배치에서 검은색 킹을 찾지 못했을 때 사용할 보드 좌표입니다.")]
+    [SerializeField] private Vector2 blackPlayerKingFallbackStart = new(4f, 7f);
+    [Tooltip("킹 모델 전체 높이 중 카메라가 놓일 비율입니다. 0.82는 머리 부근입니다.")]
+    [SerializeField, Range(0.05f, 1f)]
+    private float playerKingEyeHeightAsModelFraction = 0.82f;
+    [Tooltip("흰색 플레이어 킹의 시작 시야 각도입니다. 0도는 흰색 진영에서 검은색 진영 방향입니다.")]
+    [SerializeField, Range(0f, 360f)] private float whitePlayerKingStartYaw;
+    [Tooltip("검은색 플레이어 킹의 시작 시야 각도입니다. 180도는 흰색 진영 방향입니다.")]
+    [SerializeField, Range(0f, 360f)] private float blackPlayerKingStartYaw = 180f;
+    [Tooltip("플레이어 킹이 자기 팀 기물에도 막히고, 움직이는 아군 기물에 밀려나게 합니다.")]
+    [SerializeField] private bool playerKingCollidesWithFriendlyPieces = true;
+    [Tooltip("플레이어 킹이 경기장 경계를 넘어가면 아래로 떨어질 수 있게 합니다.")]
+    [SerializeField] private bool playerKingCanFallOffBoard = true;
+    [Tooltip("플레이어 킹이 장외에서 아래로 떨어지는 중력입니다. 초당 제곱 칸 단위입니다.")]
+    [SerializeField, Min(0.1f)] private float playerKingFallGravityInSquares = 15f;
+    [Tooltip("보드 아래로 이 깊이만큼 떨어지면 플레이어 킹을 장외 사망 처리합니다.")]
+    [SerializeField, Min(0.1f)] private float playerKingEliminationDepthInSquares = 2.5f;
+    [Tooltip("장외 낙하 중 네트워크 좌표에 허용할 최대 수평 거리입니다.")]
+    [SerializeField, Min(0.1f)]
+    private float playerKingMaximumOutOfBoundsDistanceInSquares = 4f;
 
     [Header("1인칭 이동")]
     [SerializeField, Min(0.1f)] private float moveSpeedInSquares = 5f;
@@ -634,6 +1016,19 @@ public sealed class PlayerCommanderSettings
     public Color WhiteAvatarColor => whiteAvatarColor;
     public Color BlackAvatarColor => blackAvatarColor;
     public Color UnassignedAvatarColor => unassignedAvatarColor;
+    public bool UseBoardKingPlacementAsPlayerStart =>
+        useBoardKingPlacementAsPlayerStart;
+    public float PlayerKingEyeHeightAsModelFraction =>
+        Mathf.Clamp(playerKingEyeHeightAsModelFraction, 0.05f, 1f);
+    public bool PlayerKingCollidesWithFriendlyPieces =>
+        playerKingCollidesWithFriendlyPieces;
+    public bool PlayerKingCanFallOffBoard => playerKingCanFallOffBoard;
+    public float PlayerKingFallGravityInSquares =>
+        Mathf.Max(0.1f, playerKingFallGravityInSquares);
+    public float PlayerKingEliminationDepthInSquares =>
+        Mathf.Max(0.1f, playerKingEliminationDepthInSquares);
+    public float PlayerKingMaximumOutOfBoundsDistanceInSquares =>
+        Mathf.Max(0.1f, playerKingMaximumOutOfBoundsDistanceInSquares);
     public float MoveSpeedInSquares => Mathf.Max(0.1f, moveSpeedInSquares);
     public float MouseSensitivity => Mathf.Max(0.01f, mouseSensitivity);
     public float MinimumPitch => Mathf.Clamp(minimumPitch, -89f, 0f);
@@ -646,6 +1041,23 @@ public sealed class PlayerCommanderSettings
     public float KnockbackDrag => Mathf.Max(0f, knockbackDrag);
     public Key EndTurnKey => endTurnKey;
     public PieceSelectionMouseButton ConfirmSelectionButton => confirmSelectionButton;
+
+    public Vector2 GetPlayerKingFallbackStart(PlayerTeam team)
+    {
+        return team == PlayerTeam.Black
+            ? blackPlayerKingFallbackStart
+            : whitePlayerKingFallbackStart;
+    }
+
+    public float GetPlayerKingStartYaw(PlayerTeam team)
+    {
+        return Mathf.Repeat(
+            team == PlayerTeam.Black
+                ? blackPlayerKingStartYaw
+                : whitePlayerKingStartYaw,
+            360f);
+    }
+
     public void Validate()
     {
         maximumPlayersPerTeam = Mathf.Max(1, maximumPlayersPerTeam);
@@ -653,6 +1065,21 @@ public sealed class PlayerCommanderSettings
         avatarRadiusInSquares = Mathf.Max(0.01f, avatarRadiusInSquares);
         poseUpdatesPerSecond = Mathf.Clamp(poseUpdatesPerSecond, 1f, 60f);
         maximumPoseHeightInSquares = Mathf.Max(0f, maximumPoseHeightInSquares);
+        playerKingEyeHeightAsModelFraction = Mathf.Clamp(
+            playerKingEyeHeightAsModelFraction,
+            0.05f,
+            1f);
+        whitePlayerKingStartYaw = Mathf.Repeat(whitePlayerKingStartYaw, 360f);
+        blackPlayerKingStartYaw = Mathf.Repeat(blackPlayerKingStartYaw, 360f);
+        playerKingFallGravityInSquares = Mathf.Max(
+            0.1f,
+            playerKingFallGravityInSquares);
+        playerKingEliminationDepthInSquares = Mathf.Max(
+            0.1f,
+            playerKingEliminationDepthInSquares);
+        playerKingMaximumOutOfBoundsDistanceInSquares = Mathf.Max(
+            0.1f,
+            playerKingMaximumOutOfBoundsDistanceInSquares);
         moveSpeedInSquares = Mathf.Max(0.1f, moveSpeedInSquares);
         mouseSensitivity = Mathf.Max(0.01f, mouseSensitivity);
         minimumPitch = Mathf.Clamp(minimumPitch, -89f, 0f);
@@ -849,7 +1276,7 @@ public sealed class InterfaceAndSessionSettings
     [Header("인게임 HUD 배치")]
     [SerializeField] private Rect matchTimerPanel = new(675f, 30f, 250f, 78f);
     [SerializeField] private Rect costPanel = new(30f, 30f, 360f, 142f);
-    [SerializeField] private Rect captureScorePanel = new(575f, 174f, 450f, 46f);
+    [SerializeField] private Rect captureScorePanel = new(945f, 30f, 450f, 78f);
     [SerializeField] private Key pauseMenuKey = Key.Escape;
 
     public float DesignWidth => Mathf.Max(320f, designWidth);
@@ -878,6 +1305,31 @@ public sealed class InterfaceAndSessionSettings
         value.width = Mathf.Max(1f, value.width);
         value.height = Mathf.Max(1f, value.height);
         return value;
+    }
+}
+
+[Serializable]
+public sealed class EditorSoloTestSettings
+{
+    [Tooltip("Unity 에디터에서 Play를 누르면 로컬 Host를 만들고 즉시 경기를 시작합니다. 빌드에는 적용되지 않습니다.")]
+    [SerializeField] private bool enabled = true;
+    [SerializeField] private PlayerTeam playerTeam = PlayerTeam.White;
+    [SerializeField, Min(1f)] private float startupTimeoutSeconds = 10f;
+
+    public bool Enabled => enabled;
+    public PlayerTeam PlayerTeam => playerTeam == PlayerTeam.Black
+        ? PlayerTeam.Black
+        : PlayerTeam.White;
+    public float StartupTimeoutSeconds => Mathf.Max(1f, startupTimeoutSeconds);
+
+    public void Validate()
+    {
+        if (playerTeam != PlayerTeam.White && playerTeam != PlayerTeam.Black)
+        {
+            playerTeam = PlayerTeam.White;
+        }
+
+        startupTimeoutSeconds = Mathf.Max(1f, startupTimeoutSeconds);
     }
 }
 
@@ -933,6 +1385,7 @@ public sealed class GameModeConfiguration : ScriptableObject
     [SerializeField] private BoardPresentationSettings boardPresentation = new();
     [SerializeField] private VoiceRecognitionSettings voiceRecognition = new();
     [SerializeField] private InterfaceAndSessionSettings interfaceAndSession = new();
+    [SerializeField] private EditorSoloTestSettings editorSoloTest = new();
 
     private static readonly IReadOnlyList<InitialPiecePlacement> StandardPlacements =
         CreateStandardPlacements();
@@ -953,10 +1406,38 @@ public sealed class GameModeConfiguration : ScriptableObject
     public BoardPresentationSettings BoardPresentation => boardPresentation;
     public VoiceRecognitionSettings VoiceRecognition => voiceRecognition;
     public InterfaceAndSessionSettings InterfaceAndSession => interfaceAndSession;
+    public EditorSoloTestSettings EditorSoloTest => editorSoloTest;
     public IReadOnlyList<InitialPiecePlacement> InitialPlacements =>
         boardSetup.UseCustomStartingPosition
             ? boardSetup.CustomPlacements
             : StandardPlacements;
+
+    public bool ShouldSpawnBoardPiece(InitialPiecePlacement placement)
+    {
+        return placement != null &&
+            !(victory.RoyalUnitMode == RoyalUnitMode.PlayerCommander &&
+              placement.PieceType == ChessPieceType.King);
+    }
+
+    public bool TryGetConfiguredKingPosition(
+        PlayerTeam team,
+        out Vector2 boardPosition)
+    {
+        foreach (InitialPiecePlacement placement in InitialPlacements)
+        {
+            if (placement != null &&
+                placement.Enabled &&
+                placement.Team == team &&
+                placement.PieceType == ChessPieceType.King)
+            {
+                boardPosition = placement.BoardPosition;
+                return true;
+            }
+        }
+
+        boardPosition = default;
+        return false;
+    }
 
     public PieceArchetypeSettings GetPiece(ChessPieceType pieceType)
     {
@@ -979,7 +1460,10 @@ public sealed class GameModeConfiguration : ScriptableObject
 
         foreach (InitialPiecePlacement placement in InitialPlacements)
         {
-            if (placement != null && placement.Enabled && placement.Team == team)
+            if (placement != null &&
+                placement.Enabled &&
+                placement.Team == team &&
+                ShouldSpawnBoardPiece(placement))
             {
                 count++;
             }
@@ -1020,6 +1504,7 @@ public sealed class GameModeConfiguration : ScriptableObject
         boardPresentation.Validate();
         voiceRecognition.Validate();
         interfaceAndSession.Validate();
+        editorSoloTest.Validate();
 
         foreach (PieceArchetypeSettings archetype in pieceArchetypes)
         {
@@ -1043,6 +1528,7 @@ public sealed class GameModeConfiguration : ScriptableObject
         boardPresentation ??= new BoardPresentationSettings();
         voiceRecognition ??= new VoiceRecognitionSettings();
         interfaceAndSession ??= new InterfaceAndSessionSettings();
+        editorSoloTest ??= new EditorSoloTestSettings();
     }
 
     private void RebuildPieceLookup()
