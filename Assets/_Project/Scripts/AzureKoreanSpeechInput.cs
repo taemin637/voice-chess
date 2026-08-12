@@ -33,20 +33,24 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private const string VoiceSensitivityPreference = "VoiceChess.VoiceSensitivity";
     private const string AutoNoiseCalibrationPreference = "VoiceChess.AutoNoiseCalibration";
     private const string NoiseFloorPreference = "VoiceChess.NoiseFloorDb";
-    private const double MinimumConfidence = 0.55d;
-    private const float QuietCommandDecibels = -45f;
-    private const float LoudCommandDecibels = -12f;
-    private const float MinimumCommandReach = 1f;
-    private const float MaximumCommandReach = 12f;
     private const int MicrophoneSampleRate = 16000;
     private const int PreRollSampleCount = 3200;
-    private const float VoiceStartHoldSeconds = 0.08f;
-    private const float VoiceEndSilenceSeconds = 0.12f;
-    private const float TargetSwitchBoundarySilenceSeconds = 0.04f;
-    private const float MinimumTargetSwitchUtteranceSeconds = 0.3f;
-    private const float MaximumAutomaticUtteranceSeconds = 3f;
-    private const float NoiseCalibrationSeconds = 1.5f;
-    private const float SpeechBoundaryAverageSeconds = 0.2f;
+
+    [Header("음성 인식 조정")]
+    [SerializeField, HideInInspector, Range(0f, 1f)] private float minimumConfidence = 0.55f;
+    [SerializeField, HideInInspector, Range(-80f, 0f)] private float quietCommandDecibels = -45f;
+    [SerializeField, HideInInspector, Range(-80f, 0f)] private float loudCommandDecibels = -12f;
+    [SerializeField, HideInInspector, Min(0f)] private float minimumCommandReach = 1f;
+    [SerializeField, HideInInspector, Min(0.01f)] private float maximumCommandReach = 12f;
+
+    [Header("자동 음성 감지")]
+    [SerializeField, HideInInspector, Min(0.01f)] private float voiceStartHoldSeconds = 0.08f;
+    [SerializeField, HideInInspector, Min(0.01f)] private float voiceEndSilenceSeconds = 0.12f;
+    [SerializeField, HideInInspector, Min(0f)] private float targetSwitchBoundarySilenceSeconds = 0.04f;
+    [SerializeField, HideInInspector, Min(0f)] private float minimumTargetSwitchUtteranceSeconds = 0.3f;
+    [SerializeField, HideInInspector, Min(0.1f)] private float maximumAutomaticUtteranceSeconds = 3f;
+    [SerializeField, HideInInspector, Min(0.1f)] private float noiseCalibrationSeconds = 1.5f;
+    [SerializeField, HideInInspector, Min(0.01f)] private float speechBoundaryAverageSeconds = 0.2f;
 
     private readonly ConcurrentQueue<RecognitionOutcome> _outcomes = new();
     private readonly ConcurrentQueue<CapturedUtterance> _utteranceQueue = new();
@@ -85,10 +89,14 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private bool _pendingCommandContextCaptured;
     private ushort _pendingVoiceTargetPieceId;
     private float _pendingVoiceTargetDistance;
+    private bool _pendingHasChargeAim;
+    private Vector2 _pendingChargeAimBoardPosition;
     private bool _utteranceStartTargetCaptured;
     private bool _hasUtteranceStartTarget;
     private ushort _utteranceStartTargetPieceId;
     private float _utteranceStartTargetDistance;
+    private bool _utteranceStartHasChargeAim;
+    private Vector2 _utteranceStartChargeAimBoardPosition;
     private float _lastCommandLoudnessDecibels = -80f;
     private float _lastCommandReachInSquares;
     private VoiceInputMode _inputMode = VoiceInputMode.Automatic;
@@ -149,6 +157,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     public bool AutomaticNoiseCalibration => _automaticNoiseCalibration;
     public bool IsNoiseCalibrating => _noiseCalibrationRemaining > 0f;
     public float NoiseFloorDecibels => _noiseFloorDecibels;
+    public Key PushToTalkKey => ResolveVoiceSettings()?.PushToTalkKey ?? Key.V;
     public float VoiceActivationThresholdDecibels =>
         _noiseFloorDecibels + Mathf.Lerp(18f, 6f, _voiceSensitivity);
     public string SpeechRegion
@@ -175,6 +184,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         public readonly bool HasVoiceTarget;
         public readonly ushort VoiceTargetPieceId;
         public readonly float VoiceTargetDistance;
+        public readonly bool HasChargeAim;
+        public readonly Vector2 ChargeAimBoardPosition;
         public readonly float CommandLoudnessDecibels;
         public readonly float CommandReachInSquares;
         public readonly float SpeechStartAverageDecibels;
@@ -187,6 +198,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             bool hasVoiceTarget,
             ushort voiceTargetPieceId,
             float voiceTargetDistance,
+            bool hasChargeAim,
+            Vector2 chargeAimBoardPosition,
             float commandLoudnessDecibels,
             float commandReachInSquares,
             float speechStartAverageDecibels,
@@ -198,6 +211,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             HasVoiceTarget = hasVoiceTarget;
             VoiceTargetPieceId = voiceTargetPieceId;
             VoiceTargetDistance = voiceTargetDistance;
+            HasChargeAim = hasChargeAim;
+            ChargeAimBoardPosition = chargeAimBoardPosition;
             CommandLoudnessDecibels = commandLoudnessDecibels;
             CommandReachInSquares = commandReachInSquares;
             SpeechStartAverageDecibels = speechStartAverageDecibels;
@@ -282,6 +297,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         public readonly bool HasVoiceTarget;
         public readonly ushort VoiceTargetPieceId;
         public readonly float VoiceTargetDistance;
+        public readonly bool HasChargeAim;
+        public readonly Vector2 ChargeAimBoardPosition;
         public readonly float CommandLoudnessDecibels;
         public readonly float CommandReachInSquares;
         public readonly float SpeechStartAverageDecibels;
@@ -305,6 +322,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             HasVoiceTarget = utterance.HasVoiceTarget;
             VoiceTargetPieceId = utterance.VoiceTargetPieceId;
             VoiceTargetDistance = utterance.VoiceTargetDistance;
+            HasChargeAim = utterance.HasChargeAim;
+            ChargeAimBoardPosition = utterance.ChargeAimBoardPosition;
             CommandLoudnessDecibels = utterance.CommandLoudnessDecibels;
             CommandReachInSquares = utterance.CommandReachInSquares;
             SpeechStartAverageDecibels = utterance.SpeechStartAverageDecibels;
@@ -358,16 +377,25 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
     private void Awake()
     {
+        VoiceRecognitionSettings settings = ResolveVoiceSettings();
+        VoiceInputMode defaultInputMode = settings?.DefaultInputMode ??
+            VoiceInputMode.Automatic;
+        float defaultSensitivity = settings?.DefaultVoiceSensitivity ?? 0.55f;
+        bool defaultAutomaticCalibration =
+            settings?.DefaultAutomaticNoiseCalibration ?? true;
+        float defaultNoiseFloor = settings?.DefaultNoiseFloorDecibels ?? -55f;
         _inputMode = (VoiceInputMode)Mathf.Clamp(
-            PlayerPrefs.GetInt(InputModePreference, (int)VoiceInputMode.Automatic),
+            PlayerPrefs.GetInt(InputModePreference, (int)defaultInputMode),
             (int)VoiceInputMode.Automatic,
             (int)VoiceInputMode.PushToTalk);
         _voiceSensitivity = Mathf.Clamp01(
-            PlayerPrefs.GetFloat(VoiceSensitivityPreference, 0.55f));
+            PlayerPrefs.GetFloat(VoiceSensitivityPreference, defaultSensitivity));
         _automaticNoiseCalibration =
-            PlayerPrefs.GetInt(AutoNoiseCalibrationPreference, 1) != 0;
+            PlayerPrefs.GetInt(
+                AutoNoiseCalibrationPreference,
+                defaultAutomaticCalibration ? 1 : 0) != 0;
         _noiseFloorDecibels = Mathf.Clamp(
-            PlayerPrefs.GetFloat(NoiseFloorPreference, -55f),
+            PlayerPrefs.GetFloat(NoiseFloorPreference, defaultNoiseFloor),
             -80f,
             -10f);
         RefreshMicrophoneDevices(restartCapture: false);
@@ -401,12 +429,16 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             NetworkPlayer.MatchStarted &&
             !InGameVoiceSettingsUI.IsBlockingGameplay)
         {
-            if (keyboard.vKey.wasPressedThisFrame)
+            Key pushToTalkKey = PushToTalkKey;
+
+            if (pushToTalkKey != Key.None &&
+                keyboard[pushToTalkKey].wasPressedThisFrame)
             {
                 BeginRecognition(executeCommand: true, includePreRoll: false);
             }
 
-            if (keyboard.vKey.wasReleasedThisFrame)
+            if (pushToTalkKey != Key.None &&
+                keyboard[pushToTalkKey].wasReleasedThisFrame)
             {
                 FinishSpeechInput();
             }
@@ -504,6 +536,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             _hasPendingVoiceTarget,
             _pendingVoiceTargetPieceId,
             _pendingVoiceTargetDistance,
+            _pendingHasChargeAim,
+            _pendingChargeAimBoardPosition,
             _lastCommandLoudnessDecibels,
             _lastCommandReachInSquares,
             speechStartAverageDecibels,
@@ -631,10 +665,14 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         _pendingCommandContextCaptured = false;
         _pendingVoiceTargetPieceId = 0;
         _pendingVoiceTargetDistance = 0f;
+        _pendingHasChargeAim = false;
+        _pendingChargeAimBoardPosition = default;
         _utteranceStartTargetCaptured = false;
         _hasUtteranceStartTarget = false;
         _utteranceStartTargetPieceId = 0;
         _utteranceStartTargetDistance = 0f;
+        _utteranceStartHasChargeAim = false;
+        _utteranceStartChargeAimBoardPosition = default;
         _game?.ShowLocalVoiceCommandTarget(null);
         _lastCommandLoudnessDecibels = -80f;
         _lastCommandReachInSquares = 0f;
@@ -865,7 +903,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             !_utteranceQueue.IsEmpty;
     }
 
-    private static RecognitionOutcome CreateOutcome(
+    private RecognitionOutcome CreateOutcome(
         SpeechRecognitionResult result,
         CapturedUtterance utterance)
     {
@@ -973,7 +1011,11 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
         if (!outcome.HasVoiceTarget)
         {
-            _status = "명령을 말하기 시작할 때 바라본 아군 말이 없었습니다.";
+            _status = _game != null &&
+                _game.ActiveVoiceCommandVersion ==
+                    VoiceCommandVersion.ConfirmedSelectionCharge
+                ? $"{GetConfirmSelectionButtonName()}으로 확정 선택한 아군 말이 없습니다."
+                : "명령을 말하기 시작할 때 바라본 아군 말이 없었습니다.";
             return;
         }
 
@@ -992,6 +1034,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                     outcome.CommandReachInSquares,
                     commandLoudness,
                     command,
+                    outcome.HasChargeAim,
+                    outcome.ChargeAimBoardPosition,
                     out rejection))
             {
                 _status = string.IsNullOrWhiteSpace(rejection)
@@ -1480,15 +1524,20 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             {
                 _pendingVoiceTargetPieceId = _utteranceStartTargetPieceId;
                 _pendingVoiceTargetDistance = _utteranceStartTargetDistance;
+                _pendingHasChargeAim = _utteranceStartHasChargeAim;
+                _pendingChargeAimBoardPosition =
+                    _utteranceStartChargeAimBoardPosition;
             }
 
             return;
         }
 
         _hasPendingVoiceTarget = _game != null &&
-            _game.TryGetLocalVoiceTargetSnapshot(
+            _game.TryGetLocalVoiceCommandSnapshot(
                 out _pendingVoiceTargetPieceId,
-                out _pendingVoiceTargetDistance);
+                out _pendingVoiceTargetDistance,
+                out _pendingHasChargeAim,
+                out _pendingChargeAimBoardPosition);
     }
 
     private bool IsVoicedCommandFrame(float decibels)
@@ -1524,10 +1573,12 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         _utteranceStartTargetCaptured = true;
 
         if (_game == null ||
-            !_game.TryGetLocalVoiceTargetSnapshotAt(
+            !_game.TryGetLocalVoiceCommandSnapshotAt(
                 capturedAtTime,
                 out ushort pieceId,
-                out float distanceInSquares))
+                out float distanceInSquares,
+                out bool hasChargeAim,
+                out Vector2 chargeAimBoardPosition))
         {
             return;
         }
@@ -1535,6 +1586,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         _hasUtteranceStartTarget = true;
         _utteranceStartTargetPieceId = pieceId;
         _utteranceStartTargetDistance = distanceInSquares;
+        _utteranceStartHasChargeAim = hasChargeAim;
+        _utteranceStartChargeAimBoardPosition = chargeAimBoardPosition;
         _game.ShowLocalVoiceCommandTarget(pieceId);
     }
 
@@ -1791,6 +1844,83 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         }
     }
 #endif
+
+    private VoiceRecognitionSettings ResolveVoiceSettings()
+    {
+        if (_game == null)
+        {
+            _game = FindFirstObjectByType<NetworkChessGame>();
+        }
+
+        return _game?.GameMode?.VoiceRecognition;
+    }
+
+    private string GetConfirmSelectionButtonName()
+    {
+        return (_game?.GetPlayerSettings()?.ConfirmSelectionButton ??
+                PieceSelectionMouseButton.Left) switch
+        {
+            PieceSelectionMouseButton.Right => "우클릭",
+            PieceSelectionMouseButton.Middle => "휠 클릭",
+            _ => "좌클릭"
+        };
+    }
+
+    private float MinimumConfidence =>
+        ResolveVoiceSettings()?.MinimumConfidence ?? minimumConfidence;
+    private float QuietCommandDecibels =>
+        ResolveVoiceSettings()?.QuietCommandDecibels ?? quietCommandDecibels;
+    private float LoudCommandDecibels =>
+        ResolveVoiceSettings()?.LoudCommandDecibels ?? loudCommandDecibels;
+    private float MinimumCommandReach =>
+        ResolveVoiceSettings()?.MinimumCommandReach ?? minimumCommandReach;
+    private float MaximumCommandReach =>
+        ResolveVoiceSettings()?.MaximumCommandReach ?? maximumCommandReach;
+    private float VoiceStartHoldSeconds =>
+        ResolveVoiceSettings()?.VoiceStartHoldSeconds ?? voiceStartHoldSeconds;
+    private float VoiceEndSilenceSeconds =>
+        ResolveVoiceSettings()?.VoiceEndSilenceSeconds ?? voiceEndSilenceSeconds;
+    private float TargetSwitchBoundarySilenceSeconds =>
+        ResolveVoiceSettings()?.TargetSwitchBoundarySilenceSeconds ??
+        targetSwitchBoundarySilenceSeconds;
+    private float MinimumTargetSwitchUtteranceSeconds =>
+        ResolveVoiceSettings()?.MinimumTargetSwitchUtteranceSeconds ??
+        minimumTargetSwitchUtteranceSeconds;
+    private float MaximumAutomaticUtteranceSeconds =>
+        ResolveVoiceSettings()?.MaximumAutomaticUtteranceSeconds ??
+        maximumAutomaticUtteranceSeconds;
+    private float NoiseCalibrationSeconds =>
+        ResolveVoiceSettings()?.NoiseCalibrationSeconds ?? noiseCalibrationSeconds;
+    private float SpeechBoundaryAverageSeconds =>
+        ResolveVoiceSettings()?.SpeechBoundaryAverageSeconds ??
+        speechBoundaryAverageSeconds;
+
+    private void OnValidate()
+    {
+        minimumConfidence = Mathf.Clamp01(minimumConfidence);
+        quietCommandDecibels = Mathf.Clamp(quietCommandDecibels, -80f, 0f);
+        loudCommandDecibels = Mathf.Clamp(
+            loudCommandDecibels,
+            quietCommandDecibels + 0.01f,
+            0f);
+        minimumCommandReach = Mathf.Max(0f, minimumCommandReach);
+        maximumCommandReach = Mathf.Max(
+            minimumCommandReach + 0.01f,
+            maximumCommandReach);
+        voiceStartHoldSeconds = Mathf.Max(0.01f, voiceStartHoldSeconds);
+        voiceEndSilenceSeconds = Mathf.Max(0.01f, voiceEndSilenceSeconds);
+        targetSwitchBoundarySilenceSeconds = Mathf.Max(
+            0f,
+            targetSwitchBoundarySilenceSeconds);
+        minimumTargetSwitchUtteranceSeconds = Mathf.Max(
+            0f,
+            minimumTargetSwitchUtteranceSeconds);
+        maximumAutomaticUtteranceSeconds = Mathf.Max(
+            0.1f,
+            maximumAutomaticUtteranceSeconds);
+        noiseCalibrationSeconds = Mathf.Max(0.1f, noiseCalibrationSeconds);
+        speechBoundaryAverageSeconds = Mathf.Max(0.01f, speechBoundaryAverageSeconds);
+    }
 
     private void OnDestroy()
     {

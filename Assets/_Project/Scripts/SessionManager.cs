@@ -21,10 +21,11 @@ public sealed class SessionManager : MonoBehaviour
         Lobby
     }
 
-    private const float DesignWidth = 1600f;
-    private const float DesignHeight = 900f;
-    private const int MaxPlayers = 4;
-    private const int SessionListPollingIntervalSeconds = 5;
+    [Header("메인 UI 배치")]
+    [SerializeField, HideInInspector, Min(320f)] private float designWidth = 1600f;
+    [SerializeField, HideInInspector, Min(180f)] private float designHeight = 900f;
+    [SerializeField, HideInInspector, Min(2)] private int maximumSessionPlayers = 4;
+    [SerializeField, HideInInspector, Min(1)] private int sessionListPollingIntervalSeconds = 5;
 
     private readonly List<Texture2D> _generatedTextures = new();
 
@@ -63,6 +64,9 @@ public sealed class SessionManager : MonoBehaviour
     private GUIStyle _teamBlackPanel;
     private GUIStyle _whiteTeamTitle;
     private GUIStyle _blackTeamTitle;
+    private GUIStyle _costBarBorder;
+    private GUIStyle _costBarBackground;
+    private GUIStyle _costBarFill;
 
     public static bool IsFrontEndVisible =>
         _instance != null &&
@@ -113,7 +117,7 @@ public sealed class SessionManager : MonoBehaviour
             }
             else if (chessGame != null && !chessGame.IsGameOver)
             {
-                DrawMatchTimer(chessGame.RemainingTime);
+                DrawMatchHud(chessGame);
             }
 
             return;
@@ -149,7 +153,7 @@ public sealed class SessionManager : MonoBehaviour
         GUI.matrix = previousMatrix;
     }
 
-    private void DrawMatchTimer(float remainingTime)
+    private void DrawMatchHud(NetworkChessGame chessGame)
     {
         Matrix4x4 previousMatrix = GUI.matrix;
         float scale = Mathf.Min(Screen.width / DesignWidth, Screen.height / DesignHeight);
@@ -161,15 +165,97 @@ public sealed class SessionManager : MonoBehaviour
             Quaternion.identity,
             new Vector3(scale, scale, 1f));
 
-        int seconds = Mathf.CeilToInt(remainingTime);
-        Rect timerPanel = new(675f, 30f, 250f, 78f);
+        Rect timerPanel = InterfaceSettings?.MatchTimerPanel ??
+            new Rect(675f, 30f, 250f, 78f);
         DrawShadowedPanel(timerPanel, _panel);
+        string primaryStatus;
+
+        if (chessGame.CommandMode == CommandIssuingMode.AlternatingTurns)
+        {
+            float turnTime = chessGame.RemainingTurnTime;
+            string turnClock = turnTime > 0f
+                ? $"  {Mathf.CeilToInt(turnTime)}s"
+                : string.Empty;
+            primaryStatus = $"{chessGame.ActiveCommandTeam} TURN{turnClock}";
+        }
+        else if (chessGame.IsMatchClockEnabled)
+        {
+            int seconds = Mathf.CeilToInt(chessGame.RemainingTime);
+            primaryStatus = $"{seconds / 60:00}:{seconds % 60:00}";
+        }
+        else
+        {
+            primaryStatus = "NO TIME LIMIT";
+        }
+
         GUI.Label(
             timerPanel,
-            $"{seconds / 60:00}:{seconds % 60:00}",
+            primaryStatus,
             _heroTitle);
 
+        NetworkPlayer localPlayer = NetworkPlayer.LocalPlayer;
+
+        if (localPlayer != null && chessGame.IsCostSystemEnabled)
+        {
+            DrawCostHud(chessGame, localPlayer.Team);
+        }
+
+        if (chessGame.IsCaptureModeEnabled)
+        {
+            Rect scorePanel = InterfaceSettings?.CaptureScorePanel ??
+                new Rect(575f, 174f, 450f, 46f);
+            DrawShadowedPanel(scorePanel, _panelSoft);
+            string ruleLabel = chessGame.ActiveCaptureScoringRule ==
+                CaptureScoringRule.PeriodicPerPiece
+                ? "CAPTURE SCORE"
+                : "ZONE VALUE";
+            GUI.Label(
+                scorePanel,
+                $"{ruleLabel}  W {chessGame.WhiteCaptureScore:F1}  |  B {chessGame.BlackCaptureScore:F1}",
+                _subtitle);
+        }
+
         GUI.matrix = previousMatrix;
+    }
+
+    private void DrawCostHud(NetworkChessGame chessGame, PlayerTeam localTeam)
+    {
+        Rect panel = InterfaceSettings?.CostPanel ?? new Rect(30f, 30f, 360f, 142f);
+        DrawShadowedPanel(panel, _panel);
+        GUI.Label(
+            new Rect(panel.x + 24f, panel.y + 13f, panel.width - 48f, 30f),
+            "COMMAND COST",
+            _body);
+
+        float maximum = Mathf.Max(0.01f, chessGame.MaximumCommandCost);
+        float current = Mathf.Clamp(
+            chessGame.GetCommandPoints(localTeam),
+            0f,
+            maximum);
+        float normalized = current / maximum;
+        Rect barBorder = new(panel.x + 24f, panel.y + 51f, panel.width - 48f, 30f);
+        GUI.Box(barBorder, GUIContent.none, _costBarBorder);
+        Rect barBackground = new(
+            barBorder.x + 3f,
+            barBorder.y + 3f,
+            barBorder.width - 6f,
+            barBorder.height - 6f);
+        GUI.Box(barBackground, GUIContent.none, _costBarBackground);
+
+        if (normalized > 0f)
+        {
+            Rect barFill = new(
+                barBackground.x,
+                barBackground.y,
+                barBackground.width * normalized,
+                barBackground.height);
+            GUI.Box(barFill, GUIContent.none, _costBarFill);
+        }
+
+        GUI.Label(
+            new Rect(panel.x + 24f, panel.y + 91f, panel.width - 48f, 32f),
+            $"({current:0.#}/{maximum:0.#})",
+            _subtitle);
     }
 
     private void DrawGameOverOverlay(NetworkChessGame chessGame)
@@ -208,6 +294,10 @@ public sealed class SessionManager : MonoBehaviour
             new Rect(480f, 355f, 640f, 38f),
             $"BLACK  |  REMAINING {blackRemaining}  |  KILLED {blackKills}",
             _subtitle);
+        GUI.Label(
+            new Rect(480f, 397f, 640f, 30f),
+            $"END CONDITION  |  {chessGame.EndReason.ToString().ToUpperInvariant()}",
+            _small);
 
         NetworkPlayer localPlayer = NetworkPlayer.LocalPlayer;
         bool isHost = localPlayer != null && localPlayer.IsServer;
@@ -259,6 +349,16 @@ public sealed class SessionManager : MonoBehaviour
 
         return _chessGame;
     }
+
+    private InterfaceAndSessionSettings InterfaceSettings =>
+        ResolveChessGame()?.GameMode?.InterfaceAndSession;
+    private float DesignWidth => InterfaceSettings?.DesignWidth ?? designWidth;
+    private float DesignHeight => InterfaceSettings?.DesignHeight ?? designHeight;
+    private int MaximumSessionPlayers =>
+        InterfaceSettings?.MaximumSessionPlayers ?? maximumSessionPlayers;
+    private int SessionListPollingIntervalSeconds =>
+        InterfaceSettings?.SessionListPollingIntervalSeconds ??
+        sessionListPollingIntervalSeconds;
 
     private void DrawHome()
     {
@@ -678,7 +778,7 @@ public sealed class SessionManager : MonoBehaviour
             string shortId = playerId.Substring(0, Mathf.Min(6, playerId.Length)).ToUpperInvariant();
             var options = new SessionOptions
             {
-                MaxPlayers = MaxPlayers,
+            MaxPlayers = MaximumSessionPlayers,
                 Name = $"Voice Chess - {shortId}",
                 IsPrivate = false
             }.WithRelayNetwork();
@@ -758,7 +858,7 @@ public sealed class SessionManager : MonoBehaviour
             _queryResults?.StopPolling();
             _queryResults = await MultiplayerService.Instance.QuerySessionsAsync(
                 new QuerySessionsOptions { Count = 20 });
-            _queryResults.StartPolling(SessionListPollingIntervalSeconds);
+        _queryResults.StartPolling(SessionListPollingIntervalSeconds);
             SetStatus(
                 _queryResults.Sessions.Count == 0
                     ? "No public servers found. Try again in a moment."
@@ -826,6 +926,9 @@ public sealed class SessionManager : MonoBehaviour
         _row = MakeBoxStyle(new Color32(31, 31, 31, 255), 12);
         _teamWhitePanel = MakeBoxStyle(new Color32(238, 238, 238, 255), 18);
         _teamBlackPanel = MakeBoxStyle(new Color32(14, 14, 14, 255), 18);
+        _costBarBorder = MakeBoxStyle(new Color32(225, 225, 225, 255), 8);
+        _costBarBackground = MakeBoxStyle(new Color32(48, 48, 48, 255), 6);
+        _costBarFill = MakeBoxStyle(new Color32(238, 238, 238, 255), 6);
 
         _accentButton = MakeButtonStyle(
             new Color32(238, 238, 238, 255),
@@ -1003,6 +1106,16 @@ public sealed class SessionManager : MonoBehaviour
         texture.Apply();
         _generatedTextures.Add(texture);
         return texture;
+    }
+
+    private void OnValidate()
+    {
+        designWidth = Mathf.Max(320f, designWidth);
+        designHeight = Mathf.Max(180f, designHeight);
+        maximumSessionPlayers = Mathf.Max(2, maximumSessionPlayers);
+        sessionListPollingIntervalSeconds = Mathf.Max(
+            1,
+            sessionListPollingIntervalSeconds);
     }
 
     private void OnDestroy()

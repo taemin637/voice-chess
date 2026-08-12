@@ -451,8 +451,12 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: d8b61fbba4b75834ea8f04cde093be96, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: Assembly-CSharp::SessionManager
+  designWidth: 1600
+  designHeight: 900
+  maximumSessionPlayers: 4
+  sessionListPollingIntervalSeconds: 5
 --- !u!4 &311215417
 Transform:
   m_ObjectHideFlags: 0
@@ -572,7 +576,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: a79441f348de89743a2939f4d699eac1, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: 
   m_RenderShadows: 1
   m_RequiresDepthTextureOption: 2
@@ -616,7 +620,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e38a9113ec219954a9edb11b7452dc90, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: Assembly-CSharp::OrbitCamera
   target: {fileID: 1946201754}
   distance: 3
@@ -1382,6 +1386,7 @@ MonoBehaviour:
     bishop: {fileID: 919132149155446097, guid: 0b58674d53d4f3943b512859e6366e31, type: 3}
     knight: {fileID: 919132149155446097, guid: a7209bef21ee8804891f3a83abd30261, type: 3}
     pawn: {fileID: 919132149155446097, guid: f58f9e1e04977cc4ab92380e016856e4, type: 3}
+  previewGameMode: {fileID: 11400000, guid: a86093a36d884a37a4e97b5e0e131c67, type: 2}
   placementOrigin: {fileID: 472107425}
   anchor: 0
   placementPlane: 0
@@ -1400,6 +1405,8 @@ MonoBehaviour:
   generatedRoot: {fileID: 1237037949}
   selectionMarkerColor: {r: 1, g: 0.8, b: 0, a: 1}
   selectionMarkerSegments: 48
+  voiceHoverMarkerColor: {r: 0.1, g: 0.45, b: 1, a: 1}
+  confirmedVoiceMarkerColor: {r: 1, g: 0.38, b: 0.05, a: 1}
   whiteHeadingArrowColor: {r: 0.1, g: 0.85, b: 1, a: 0.95}
   blackHeadingArrowColor: {r: 1, g: 0.3, b: 0.15, a: 0.95}
   headingArrowLengthInSquares: 0.72
@@ -3040,6 +3047,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::NetworkChessGame
   ShowTopMostFoldoutHeaderGroup: 1
   pieceSpawner: {fileID: 0}
+  gameMode: {fileID: 11400000, guid: a86093a36d884a37a4e97b5e0e131c67, type: 2}
   matchDurationSeconds: 60
   voiceMoveSpeed: 1.2
   voiceTurnSpeed: 90
@@ -3060,6 +3068,99 @@ MonoBehaviour:
   kingDeathOutwardDistanceInSquares: 1.1
   kingDeathTiltAngle: 91
   kingDeathCameraFieldOfView: 48
+--- !u!1 &2105000000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2105000001}
+  - component: {fileID: 2105000002}
+  - component: {fileID: 2105000003}
+  - component: {fileID: 2105000004}
+  m_Layer: 0
+  m_Name: Configurable Runtime Systems
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2105000001
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2105000000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2105000002
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2105000000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9a7f8c6d5e4b4321a0f9e8d7c6b5a401, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Assembly-CSharp::FirstPersonCommanderController
+  moveSpeedInSquares: 5
+  mouseSensitivity: 0.08
+  minimumPitch: -75
+  maximumPitch: 75
+  eyeHeightAsPieceFraction: 0.5
+  collisionRadiusInSquares: 0.16
+  jumpSpeedInSquares: 4.2
+  gravityInSquares: 15
+  playerKnockbackDrag: 2.2
+--- !u!114 &2105000003
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2105000000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d29dc282fa1f48a7ac44ce786c2e401c, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Assembly-CSharp::AzureKoreanSpeechInput
+  minimumConfidence: 0.55
+  quietCommandDecibels: -45
+  loudCommandDecibels: -12
+  minimumCommandReach: 1
+  maximumCommandReach: 12
+  voiceStartHoldSeconds: 0.08
+  voiceEndSilenceSeconds: 0.12
+  targetSwitchBoundarySilenceSeconds: 0.04
+  minimumTargetSwitchUtteranceSeconds: 0.3
+  maximumAutomaticUtteranceSeconds: 3
+  noiseCalibrationSeconds: 1.5
+  speechBoundaryAverageSeconds: 0.2
+--- !u!114 &2105000004
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2105000000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6c4dfda203a4d514abcd9e16502ffa46, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Assembly-CSharp::InGameVoiceSettingsUI
+  designWidth: 1600
+  designHeight: 900
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -3074,4 +3175,5 @@ SceneRoots:
   - {fileID: 311215417}
   - {fileID: 766910926}
   - {fileID: 2096085084}
+  - {fileID: 2105000001}
   - {fileID: 472107424}

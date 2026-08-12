@@ -5,18 +5,22 @@ using UnityEngine.SceneManagement;
 [DisallowMultipleComponent]
 public sealed class FirstPersonCommanderController : MonoBehaviour
 {
-    [SerializeField, Min(0.1f)] private float moveSpeedInSquares = 5.0f;
-    [SerializeField, Min(0.01f)] private float mouseSensitivity = 0.08f;
-    [SerializeField, Range(-89f, 0f)] private float minimumPitch = -75f;
-    [SerializeField, Range(0f, 89f)] private float maximumPitch = 75f;
-    [SerializeField, Range(0.05f, 1f)] private float eyeHeightAsPieceFraction = 0.5f;
+    [SerializeField, HideInInspector, Min(0.1f)] private float moveSpeedInSquares = 5.0f;
+    [SerializeField, HideInInspector, Min(0.01f)] private float mouseSensitivity = 0.08f;
+    [SerializeField, HideInInspector, Range(-89f, 0f)] private float minimumPitch = -75f;
+    [SerializeField, HideInInspector, Range(0f, 89f)] private float maximumPitch = 75f;
+    [SerializeField, HideInInspector, Range(0.05f, 1f)] private float eyeHeightAsPieceFraction = 0.5f;
 
-    [Header("Player Capsule Physics")]
-    [SerializeField, Range(0.08f, 0.35f)]
+    [Header("플레이어 캡슐 물리")]
+    [SerializeField, HideInInspector, Range(0.08f, 0.35f)]
     private float collisionRadiusInSquares = 0.16f;
-    [SerializeField, Min(0.1f)] private float jumpSpeedInSquares = 4.2f;
-    [SerializeField, Min(0.1f)] private float gravityInSquares = 15.0f;
-    [SerializeField, Min(0f)] private float playerKnockbackDrag = 2.2f;
+    [SerializeField, HideInInspector, Min(0.1f)] private float jumpSpeedInSquares = 4.2f;
+    [SerializeField, HideInInspector, Min(0.1f)] private float gravityInSquares = 15.0f;
+    [SerializeField, HideInInspector, Min(0f)] private float playerKnockbackDrag = 2.2f;
+
+    [Header("턴 조작")]
+    [Tooltip("Used only when the Game Mode command mode is Alternating Turns.")]
+    [SerializeField, HideInInspector] private Key endTurnKey = Key.Enter;
 
     private Camera _viewCamera;
     private ChessPieceSpawner _pieceSpawner;
@@ -62,6 +66,8 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
 
         bool gameplayInputActive =
             NetworkPlayer.MatchStarted &&
+            (ResolveLocalNetworkPlayer() == null ||
+             !ResolveLocalNetworkPlayer().IsEliminated) &&
             !SessionManager.IsFrontEndVisible &&
             !InGameVoiceSettingsUI.IsBlockingGameplay;
 
@@ -70,6 +76,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         if (gameplayInputActive)
         {
             UpdateLook();
+            UpdateTurnInput();
         }
 
         UpdateMovement(gameplayInputActive);
@@ -131,11 +138,32 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         }
 
         Vector2 mouseDelta = Mouse.current.delta.ReadValue();
-        _yaw += mouseDelta.x * mouseSensitivity;
+        PlayerCommanderSettings settings = _game?.GetPlayerSettings();
+        float sensitivity = settings?.MouseSensitivity ?? mouseSensitivity;
+        float minPitch = settings?.MinimumPitch ?? minimumPitch;
+        float maxPitch = settings?.MaximumPitch ?? maximumPitch;
+        _yaw += mouseDelta.x * sensitivity;
         _pitch = Mathf.Clamp(
-            _pitch - mouseDelta.y * mouseSensitivity,
-            minimumPitch,
-            maximumPitch);
+            _pitch - mouseDelta.y * sensitivity,
+            minPitch,
+            maxPitch);
+    }
+
+    private void UpdateTurnInput()
+    {
+        Keyboard keyboard = Keyboard.current;
+        PlayerCommanderSettings settings = _game?.GetPlayerSettings();
+        Key resolvedEndTurnKey = settings?.EndTurnKey ?? endTurnKey;
+
+        if (_game == null ||
+            keyboard == null ||
+            resolvedEndTurnKey == Key.None ||
+            !keyboard[resolvedEndTurnKey].wasPressedThisFrame)
+        {
+            return;
+        }
+
+        _game.TryEndLocalTurn(out _);
     }
 
     private void UpdateMovement(bool gameplayInputActive)
@@ -167,10 +195,12 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         Vector2 desiredVelocity = new(
             Vector3.Dot(desiredDirection, _pieceSpawner.BoardRight),
             Vector3.Dot(desiredDirection, _pieceSpawner.BoardForward));
-        desiredVelocity *= moveSpeedInSquares;
+        PlayerCommanderSettings settings = _game?.GetPlayerSettings();
+        desiredVelocity *= settings?.MoveSpeedInSquares ?? moveSpeedInSquares;
 
         float deltaTime = Time.deltaTime;
-        _knockbackVelocity *= Mathf.Exp(-playerKnockbackDrag * deltaTime);
+        float knockbackDrag = settings?.KnockbackDrag ?? playerKnockbackDrag;
+        _knockbackVelocity *= Mathf.Exp(-knockbackDrag * deltaTime);
         Vector2 playerVelocity = desiredVelocity + _knockbackVelocity;
         Vector2 playerPosition = new(_file, _rank);
         playerPosition += playerVelocity * deltaTime;
@@ -184,7 +214,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         _game.ResolvePlayerPieceCollisions(
             team,
             _heightInSquares,
-            collisionRadiusInSquares,
+            settings?.CollisionRadiusInSquares ?? collisionRadiusInSquares,
             ref playerPosition,
             ref playerVelocity);
         _knockbackVelocity = playerVelocity - desiredVelocity;
@@ -220,7 +250,8 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
             keyboard.spaceKey.wasPressedThisFrame &&
             _isGrounded)
         {
-            _verticalVelocity = jumpSpeedInSquares;
+            PlayerCommanderSettings settings = _game?.GetPlayerSettings();
+            _verticalVelocity = settings?.JumpSpeedInSquares ?? jumpSpeedInSquares;
             _isGrounded = false;
         }
 
@@ -231,7 +262,9 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
             return;
         }
 
-        _verticalVelocity -= gravityInSquares * deltaTime;
+        PlayerCommanderSettings gravitySettings = _game?.GetPlayerSettings();
+        _verticalVelocity -= (gravitySettings?.GravityInSquares ?? gravityInSquares) *
+            deltaTime;
         _heightInSquares += _verticalVelocity * deltaTime;
 
         if (_heightInSquares <= 0f)
@@ -265,14 +298,18 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         if (_eyeHeightWorld <= 0f &&
             _pieceSpawner.TryGetRepresentativePieceHeight(out float pieceHeight))
         {
-            _eyeHeightWorld = pieceHeight * eyeHeightAsPieceFraction;
+            PlayerCommanderSettings settings = _game?.GetPlayerSettings();
+            _eyeHeightWorld = pieceHeight *
+                (settings?.EyeHeightAsPieceFraction ?? eyeHeightAsPieceFraction);
         }
 
         float eyeHeight = _eyeHeightWorld > 0f
             ? _eyeHeightWorld
             : Mathf.Min(
                 _pieceSpawner.FileSpacing,
-                _pieceSpawner.RankSpacing) * eyeHeightAsPieceFraction;
+                _pieceSpawner.RankSpacing) *
+              (_game?.GetPlayerSettings()?.EyeHeightAsPieceFraction ??
+               eyeHeightAsPieceFraction);
 
         _viewCamera.transform.SetPositionAndRotation(
             transform.position + up * eyeHeight,
@@ -282,6 +319,17 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
     private void UpdateGazeTarget(bool gameplayInputActive)
     {
         NetworkPlayer localPlayer = NetworkPlayer.LocalPlayer;
+
+        if (gameplayInputActive && localPlayer != null)
+        {
+            _game.UpdateLocalChargeAim(
+                new Ray(_viewCamera.transform.position, _viewCamera.transform.forward),
+                localPlayer.Team);
+        }
+        else
+        {
+            _game.UpdateLocalChargeAim(default, PlayerTeam.Unassigned);
+        }
 
         if (!gameplayInputActive || localPlayer == null ||
             !_pieceSpawner.TryGetGazeTarget(
@@ -294,6 +342,29 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         }
 
         _game.UpdateLocalVoiceGazeTarget(pieceId, _file, _rank);
+
+        if (_game.ActiveVoiceCommandVersion ==
+                VoiceCommandVersion.ConfirmedSelectionCharge &&
+            Mouse.current != null &&
+            WasConfirmSelectionPressed(
+                Mouse.current,
+                _game.GetPlayerSettings()?.ConfirmSelectionButton ??
+                PieceSelectionMouseButton.Left))
+        {
+            _game.ConfirmLocalVoiceSelection(pieceId, out _);
+        }
+    }
+
+    private static bool WasConfirmSelectionPressed(
+        Mouse mouse,
+        PieceSelectionMouseButton button)
+    {
+        return button switch
+        {
+            PieceSelectionMouseButton.Right => mouse.rightButton.wasPressedThisFrame,
+            PieceSelectionMouseButton.Middle => mouse.middleButton.wasPressedThisFrame,
+            _ => mouse.leftButton.wasPressedThisFrame
+        };
     }
 
     private void OnGUI()

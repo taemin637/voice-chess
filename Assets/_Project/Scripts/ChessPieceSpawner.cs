@@ -71,11 +71,15 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     private readonly GameObject[,] spawnedPieces = new GameObject[8, 8];
     private readonly Dictionary<ushort, NetworkPieceVisual> networkPieceVisuals = new();
 
-    [Header("Piece Prefabs")]
+    [Header("기물 프리팹")]
     [SerializeField] private ChessPiecePrefabSet whitePieces = new();
     [SerializeField] private ChessPiecePrefabSet blackPieces = new();
 
-    [Header("Placement Reference")]
+    [Header("에디터 시작 배치 미리보기")]
+    [Tooltip("When assigned, Generate Initial Position previews the same roster used by NetworkChessGame.")]
+    [SerializeField] private GameModeConfiguration previewGameMode;
+
+    [Header("배치 기준")]
     [Tooltip("Object used as the placement reference. If empty, this component's object is used.")]
     [SerializeField] private Transform placementOrigin;
     [Tooltip("Choose whether the reference object is at the board centre or at the centre of a1.")]
@@ -87,7 +91,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     [Tooltip("Optional parent for the generated-pieces container.")]
     [SerializeField] private Transform pieceParent;
 
-    [Header("Spacing")]
+    [Header("기물 간격")]
     [Tooltip("Distance between adjacent files: a-b, b-c, etc.")]
     [SerializeField, Min(0.001f)] private float fileSpacing = 1f;
     [Tooltip("Distance between adjacent ranks: 1-2, 2-3, etc.")]
@@ -95,33 +99,37 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     [Tooltip("Piece pivot height along the selected placement plane's up axis.")]
     [SerializeField] private float heightOffset;
 
-    [Header("Board Ground")]
+    [Header("체스판 바닥")]
     [Tooltip("Walkable border outside the 8x8 squares, measured in chess-square units.")]
     [SerializeField, Min(0f)]
     private float boardBorderWidthInSquares = DefaultBoardBorderWidthInSquares;
 
-    [Header("Ring Out Visuals")]
+    [Header("장외 연출")]
     [Tooltip("Distance beyond the board edge over which the falling animation plays.")]
     [SerializeField, Min(0.1f)] private float ringOutVisualDistance = 0.8f;
     [Tooltip("Downward fall distance, measured in chess-square units.")]
     [SerializeField, Min(0.1f)] private float ringOutDropDistance = 2.5f;
     [SerializeField, Range(0f, 120f)] private float ringOutTiltAngle = 82f;
 
-    [Header("Rotation")]
+    [Header("회전")]
     [Tooltip("Rotation added to every White prefab, relative to the reference object.")]
     [SerializeField] private Vector3 whiteRotationOffset;
     [Tooltip("Rotation added to every Black prefab, relative to the reference object.")]
     [SerializeField] private Vector3 blackRotationOffset = new(0f, 180f, 0f);
 
-    [Header("Generation")]
+    [Header("생성")]
     [SerializeField] private bool generateOnStart = true;
     [SerializeField, HideInInspector] private Transform generatedRoot;
 
-    [Header("Selection Marker")]
+    [Header("선택 표시")]
     [SerializeField] private Color selectionMarkerColor = new(1f, 0.8f, 0f, 1f);
     [SerializeField, Range(16, 96)] private int selectionMarkerSegments = 48;
+    [SerializeField] private Color voiceHoverMarkerColor =
+        new(0.1f, 0.45f, 1f, 1f);
+    [SerializeField] private Color confirmedVoiceMarkerColor =
+        new(1f, 0.38f, 0.05f, 1f);
 
-    [Header("Piece Heading Arrow")]
+    [Header("기물 방향 화살표")]
     [SerializeField] private Color whiteHeadingArrowColor = new(0.1f, 0.85f, 1f, 0.95f);
     [SerializeField] private Color blackHeadingArrowColor = new(1f, 0.3f, 0.15f, 0.95f);
     [SerializeField, Range(0.3f, 1f)] private float headingArrowLengthInSquares = 0.72f;
@@ -141,6 +149,9 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     private GameObject voiceSelectionMarker;
     private Material voiceSelectionMaterial;
     private int voiceSelectionPieceId = -1;
+    private GameObject confirmedVoiceSelectionMarker;
+    private Material confirmedVoiceSelectionMaterial;
+    private int confirmedVoiceSelectionPieceId = -1;
     private GameObject voiceCommandMarker;
     private Material voiceCommandMaterial;
     private int voiceCommandPieceId = -1;
@@ -154,6 +165,11 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     public float RankSpacing => rankSpacing;
     public float GroundMinimumCoordinate => -0.5f - boardBorderWidthInSquares;
     public float GroundMaximumCoordinate => 7.5f + boardBorderWidthInSquares;
+
+    private void Awake()
+    {
+        ApplyCentralConfiguration();
+    }
 
     private Quaternion PlacementRotation
     {
@@ -216,6 +232,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     [ContextMenu("Generate Initial Position")]
     public void GenerateInitialPosition()
     {
+        GameModeConfiguration configuration = ResolveCentralConfiguration();
+        ApplyCentralConfiguration(configuration);
         ClearGeneratedPieces();
 
         if (!whitePieces.HasAnyPrefab && !blackPieces.HasAnyPrefab)
@@ -227,6 +245,13 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         }
 
         CreateGeneratedRoot();
+
+        if (configuration != null)
+        {
+            SpawnConfiguredPosition(configuration);
+            return;
+        }
+
         SpawnSide(whitePieces, "White", backRank: 0, pawnRank: 1, whiteRotationOffset);
         SpawnSide(blackPieces, "Black", backRank: 7, pawnRank: 6, blackRotationOffset);
     }
@@ -550,6 +575,25 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         }
     }
 
+    public void SetConfirmedVoiceSelectionTarget(ushort? pieceId)
+    {
+        confirmedVoiceSelectionPieceId = pieceId.HasValue ? pieceId.Value : -1;
+
+        if (confirmedVoiceSelectionPieceId < 0 &&
+            confirmedVoiceSelectionMarker != null)
+        {
+            confirmedVoiceSelectionMarker.SetActive(false);
+        }
+    }
+
+    public bool TryGetNetworkPieceWorldBounds(ushort pieceId, out Bounds bounds)
+    {
+        bounds = default;
+        return networkPieceVisuals.TryGetValue(pieceId, out NetworkPieceVisual visual) &&
+            visual.Instance != null &&
+            TryGetVisualBounds(visual, out bounds);
+    }
+
     public void SetVoiceCommandTarget(ushort? pieceId, float duration = -1f)
     {
         voiceCommandPieceId = pieceId.HasValue ? pieceId.Value : -1;
@@ -674,6 +718,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     public void RebuildFromNetworkState(
         IEnumerable<NetworkChessPieceState> pieceStates)
     {
+        ApplyCentralConfiguration();
+
         if (!networkVisualMode)
         {
             ClearGeneratedPieces();
@@ -1082,9 +1128,17 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             ref voiceSelectionMaterial,
             voiceSelectionPieceId,
             "Voice Gaze Selection",
-            new Color(0.1f, 0.45f, 1f, 1f),
+            voiceHoverMarkerColor,
             0.46f,
             0.025f);
+        UpdateVoiceTargetMarker(
+            ref confirmedVoiceSelectionMarker,
+            ref confirmedVoiceSelectionMaterial,
+            confirmedVoiceSelectionPieceId,
+            "Confirmed Voice Selection",
+            confirmedVoiceMarkerColor,
+            0.5f,
+            0.035f);
         UpdateVoiceTargetMarker(
             ref voiceCommandMarker,
             ref voiceCommandMaterial,
@@ -1266,6 +1320,11 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             Destroy(voiceSelectionMaterial);
         }
 
+        if (confirmedVoiceSelectionMaterial != null)
+        {
+            Destroy(confirmedVoiceSelectionMaterial);
+        }
+
         if (voiceCommandMaterial != null)
         {
             Destroy(voiceCommandMaterial);
@@ -1324,11 +1383,42 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         }
     }
 
+    private void SpawnConfiguredPosition(GameModeConfiguration configuration)
+    {
+        int index = 0;
+
+        foreach (InitialPiecePlacement placement in configuration.InitialPlacements)
+        {
+            if (placement == null ||
+                !placement.Enabled ||
+                placement.PieceType == ChessPieceType.None ||
+                (placement.Team != PlayerTeam.White &&
+                 placement.Team != PlayerTeam.Black))
+            {
+                continue;
+            }
+
+            GameObject prefab = GetPiecePrefab(placement.Team, placement.PieceType);
+            Vector3 rotationOffset = placement.Team == PlayerTeam.White
+                ? whiteRotationOffset
+                : blackRotationOffset;
+            Vector2 boardPosition = placement.BoardPosition;
+            SpawnPiece(
+                prefab,
+                $"{placement.Team}_{placement.PieceType}_{index++:00}_" +
+                $"({boardPosition.x:F1},{boardPosition.y:F1})",
+                boardPosition.x,
+                boardPosition.y,
+                rotationOffset,
+                registerSingleSquare: false);
+        }
+    }
+
     private void SpawnPiece(
         GameObject prefab,
         string instanceName,
-        int file,
-        int rank,
+        float file,
+        float rank,
         Vector3 rotationOffset,
         float verticalOffset = 0f,
         bool registerSingleSquare = true)
@@ -1341,7 +1431,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         Quaternion rotation =
             PlacementRotation * Quaternion.Euler(rotationOffset) * prefab.transform.rotation;
         Vector3 position =
-            GetSquareWorldPosition(file, rank) +
+            GetBoardWorldPosition(file, rank) +
             PlacementRotation * Vector3.up * verticalOffset;
         GameObject instance;
 
@@ -1365,7 +1455,16 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
         if (registerSingleSquare)
         {
-            spawnedPieces[file, rank] = instance;
+            int squareFile = Mathf.RoundToInt(file);
+            int squareRank = Mathf.RoundToInt(rank);
+
+            if ((uint)squareFile < 8 &&
+                (uint)squareRank < 8 &&
+                Mathf.Approximately(file, squareFile) &&
+                Mathf.Approximately(rank, squareRank))
+            {
+                spawnedPieces[squareFile, squareRank] = instance;
+            }
         }
     }
 
@@ -1400,6 +1499,58 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     private static string GetSquareName(int file, int rank)
     {
         return $"{(char)('a' + file)}{rank + 1}";
+    }
+
+    private GameModeConfiguration ResolveCentralConfiguration()
+    {
+        NetworkChessGame game = FindFirstObjectByType<NetworkChessGame>();
+
+        if (game != null && game.GameMode != null)
+        {
+            return game.GameMode;
+        }
+
+        return previewGameMode;
+    }
+
+    private void ApplyCentralConfiguration()
+    {
+        ApplyCentralConfiguration(ResolveCentralConfiguration());
+    }
+
+    private void ApplyCentralConfiguration(GameModeConfiguration configuration)
+    {
+        BoardPresentationSettings settings = configuration?.BoardPresentation;
+
+        if (settings == null)
+        {
+            return;
+        }
+
+        whitePieces = settings.WhitePieces ?? whitePieces;
+        blackPieces = settings.BlackPieces ?? blackPieces;
+        anchor = settings.Anchor;
+        placementPlane = settings.PlacementPlane;
+        layoutYawOffset = settings.LayoutYawOffset;
+        fileSpacing = settings.FileSpacing;
+        rankSpacing = settings.RankSpacing;
+        heightOffset = settings.HeightOffset;
+        boardBorderWidthInSquares = settings.BoardBorderWidthInSquares;
+        whiteRotationOffset = settings.WhiteRotationOffset;
+        blackRotationOffset = settings.BlackRotationOffset;
+        ringOutVisualDistance = settings.RingOutVisualDistance;
+        ringOutDropDistance = settings.RingOutDropDistance;
+        ringOutTiltAngle = settings.RingOutTiltAngle;
+        selectionMarkerColor = settings.SelectionMarkerColor;
+        selectionMarkerSegments = settings.SelectionMarkerSegments;
+        voiceHoverMarkerColor = settings.VoiceHoverMarkerColor;
+        confirmedVoiceMarkerColor = settings.ConfirmedVoiceMarkerColor;
+        whiteHeadingArrowColor = settings.WhiteHeadingArrowColor;
+        blackHeadingArrowColor = settings.BlackHeadingArrowColor;
+        headingArrowLengthInSquares = settings.HeadingArrowLengthInSquares;
+        headingArrowWidthInSquares = settings.HeadingArrowWidthInSquares;
+        headingArrowHeightInSquares = settings.HeadingArrowHeightInSquares;
+        generateOnStart = settings.GenerateOnStart;
     }
 
     private void OnValidate()

@@ -69,6 +69,10 @@ public static class KoreanVoiceCommandParser
 
     private static readonly PhraseDefinition[] Definitions =
     {
+        new("돌진", PieceVoiceCommand.Charge),
+        new("돌진해", PieceVoiceCommand.Charge),
+        new("돌진해 줘", PieceVoiceCommand.Charge),
+
         new("앞으로 가", PieceVoiceCommand.MoveForward),
         new("앞으로 이동", PieceVoiceCommand.MoveForward),
         new("앞쪽으로 가", PieceVoiceCommand.MoveForward),
@@ -111,7 +115,14 @@ public static class KoreanVoiceCommandParser
         new("오른쪽으로 틀어", PieceVoiceCommand.TurnRight),
         new("우회전", PieceVoiceCommand.TurnRight),
         new("우측으로 돌아", PieceVoiceCommand.TurnRight),
-        new("옆으로 돌아", PieceVoiceCommand.TurnRight)
+        new("옆으로 돌아", PieceVoiceCommand.TurnRight),
+
+        new("주 스킬 사용", PieceVoiceCommand.SkillPrimary),
+        new("첫 번째 스킬", PieceVoiceCommand.SkillPrimary),
+        new("1번 스킬", PieceVoiceCommand.SkillPrimary),
+        new("보조 스킬 사용", PieceVoiceCommand.SkillSecondary),
+        new("두 번째 스킬", PieceVoiceCommand.SkillSecondary),
+        new("2번 스킬", PieceVoiceCommand.SkillSecondary)
     };
 
     private static readonly string[] SequenceConnectors =
@@ -400,6 +411,17 @@ public static class KoreanVoiceCommandParser
                 "멈춤 계열 표현",
                 0.97f,
                 "멈춤 핵심어 감지");
+            return true;
+        }
+
+        if (ContainsAny(text, "돌진"))
+        {
+            result = Accepted(
+                PieceVoiceCommand.Charge,
+                normalized,
+                "돌진",
+                0.99f,
+                "돌진 핵심어 감지");
             return true;
         }
 

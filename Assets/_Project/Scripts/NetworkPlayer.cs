@@ -11,10 +11,15 @@ public enum PlayerTeam
 
 public sealed class NetworkPlayer : NetworkBehaviour
 {
-    private const int MaxPlayersPerTeam = 2;
-    private const float AvatarPoseSendInterval = 1f / 20f;
-    private const float AvatarHeightInSquares = 0.68f;
-    private const float AvatarRadiusInSquares = 0.16f;
+    [Header("게임 모드 미지정 시 구버전 대체 설정")]
+    [SerializeField, HideInInspector, Min(1)] private int maximumPlayersPerTeam = 2;
+    [SerializeField, HideInInspector, Range(1f, 60f)] private float avatarPoseUpdatesPerSecond = 20f;
+    [SerializeField, HideInInspector, Min(0.1f)] private float avatarHeightInSquares = 0.68f;
+    [SerializeField, HideInInspector, Min(0.01f)] private float avatarRadiusInSquares = 0.16f;
+    [SerializeField, HideInInspector, Min(0f)] private float maximumAvatarHeightInSquares = 4f;
+    [SerializeField, HideInInspector] private Color whiteAvatarColor = new(0.92f, 0.95f, 1f, 1f);
+    [SerializeField, HideInInspector] private Color blackAvatarColor = new(0.08f, 0.12f, 0.2f, 1f);
+    [SerializeField, HideInInspector] private Color unassignedAvatarColor = new(0.45f, 0.5f, 0.55f, 1f);
 
     private static readonly List<NetworkPlayer> SpawnedPlayers = new();
 
@@ -38,8 +43,14 @@ public sealed class NetworkPlayer : NetworkBehaviour
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    private readonly NetworkVariable<bool> _isEliminated = new(
+        false,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     private string _selectionStatus = "Choose a team.";
     private ChessPieceSpawner _pieceSpawner;
+    private NetworkChessGame _chessGame;
     private GameObject _avatarCapsule;
     private Renderer _avatarRenderer;
     private Material _avatarMaterial;
@@ -50,6 +61,10 @@ public sealed class NetworkPlayer : NetworkBehaviour
     private bool _avatarTransformInitialized;
 
     public PlayerTeam Team => _team.Value;
+    public bool IsEliminated => _isEliminated.Value;
+    public Vector3 AvatarBoardPose => IsOwner && _hasLocalAvatarPose
+        ? _localAvatarBoardPose
+        : _avatarBoardPose.Value;
     public string SelectionStatus => _selectionStatus;
     public bool IsOwnedByMe => IsOwner;
     public string DisplayName => $"Player {OwnerClientId + 1:00}";
@@ -106,6 +121,19 @@ public sealed class NetworkPlayer : NetworkBehaviour
         return false;
     }
 
+    public bool TryGetAvatarWorldBounds(out Bounds bounds)
+    {
+        bounds = default;
+
+        if (_avatarRenderer == null || !_avatarRenderer.enabled)
+        {
+            return false;
+        }
+
+        bounds = _avatarRenderer.bounds;
+        return bounds.size.sqrMagnitude > 0.0001f;
+    }
+
     public override void OnNetworkSpawn()
     {
         SpawnedPlayers.Add(this);
@@ -118,6 +146,7 @@ public sealed class NetworkPlayer : NetworkBehaviour
         }
 
         _team.OnValueChanged += HandleTeamChanged;
+        _isEliminated.OnValueChanged += HandleEliminatedChanged;
         EnsureAvatarCapsule();
         UpdateAvatarAppearance();
 
@@ -132,6 +161,7 @@ public sealed class NetworkPlayer : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         _team.OnValueChanged -= HandleTeamChanged;
+        _isEliminated.OnValueChanged -= HandleEliminatedChanged;
         SpawnedPlayers.Remove(this);
 
         if (_avatarCapsule != null)
@@ -184,7 +214,7 @@ public sealed class NetworkPlayer : NetworkBehaviour
             return;
         }
 
-        _nextAvatarPoseSendTime = Time.unscaledTime + AvatarPoseSendInterval;
+        _nextAvatarPoseSendTime = Time.unscaledTime + ResolvePoseSendInterval();
         SubmitAvatarPoseRpc(_localAvatarBoardPose, _localAvatarYaw);
     }
 
@@ -202,7 +232,7 @@ public sealed class NetworkPlayer : NetworkBehaviour
             : 7.5f + ChessPieceSpawner.DefaultBoardBorderWidthInSquares;
 
         boardPose.x = Mathf.Clamp(boardPose.x, minimum, maximum);
-        boardPose.y = Mathf.Clamp(boardPose.y, 0f, 4f);
+        boardPose.y = Mathf.Clamp(boardPose.y, 0f, ResolveMaximumAvatarHeight());
         boardPose.z = Mathf.Clamp(boardPose.z, minimum, maximum);
         _avatarBoardPose.Value = boardPose;
         _avatarYaw.Value = Mathf.Repeat(yaw, 360f);
@@ -254,7 +284,7 @@ public sealed class NetworkPlayer : NetworkBehaviour
             ? _localAvatarYaw
             : _avatarYaw.Value;
         float squareSize = Mathf.Min(spawner.FileSpacing, spawner.RankSpacing);
-        float capsuleHeight = AvatarHeightInSquares * squareSize;
+        float capsuleHeight = ResolveAvatarHeight() * squareSize;
 
         if (spawner.TryGetRepresentativePieceHeight(out float pieceHeight))
         {
@@ -263,7 +293,7 @@ public sealed class NetworkPlayer : NetworkBehaviour
             capsuleHeight = Mathf.Max(capsuleHeight, pieceHeight * 0.6f);
         }
 
-        float capsuleDiameter = AvatarRadiusInSquares * 2f * squareSize;
+        float capsuleDiameter = ResolveAvatarRadius() * 2f * squareSize;
         Vector3 groundPosition = spawner.GetBoardWorldPosition(
             boardPose.x,
             boardPose.z);
@@ -310,9 +340,79 @@ public sealed class NetworkPlayer : NetworkBehaviour
         return _pieceSpawner;
     }
 
+    private NetworkChessGame ResolveChessGame()
+    {
+        if (_chessGame == null || !_chessGame.IsSpawned)
+        {
+            _chessGame = FindFirstObjectByType<NetworkChessGame>();
+        }
+
+        return _chessGame;
+    }
+
+    private PlayerCommanderSettings ResolvePlayerSettings()
+    {
+        return ResolveChessGame()?.GetPlayerSettings();
+    }
+
+    private int ResolveMaximumPlayersPerTeam()
+    {
+        return ResolvePlayerSettings()?.MaximumPlayersPerTeam ??
+            Mathf.Max(1, maximumPlayersPerTeam);
+    }
+
+    private float ResolvePoseSendInterval()
+    {
+        return ResolvePlayerSettings()?.PoseSendInterval ??
+            1f / Mathf.Clamp(avatarPoseUpdatesPerSecond, 1f, 60f);
+    }
+
+    private float ResolveAvatarHeight()
+    {
+        return ResolvePlayerSettings()?.AvatarHeightInSquares ??
+            Mathf.Max(0.1f, avatarHeightInSquares);
+    }
+
+    private float ResolveAvatarRadius()
+    {
+        return ResolvePlayerSettings()?.AvatarRadiusInSquares ??
+            Mathf.Max(0.01f, avatarRadiusInSquares);
+    }
+
+    private float ResolveMaximumAvatarHeight()
+    {
+        return ResolvePlayerSettings()?.MaximumPoseHeightInSquares ??
+            Mathf.Max(0f, maximumAvatarHeightInSquares);
+    }
+
     private void HandleTeamChanged(PlayerTeam previousTeam, PlayerTeam newTeam)
     {
         UpdateAvatarAppearance();
+    }
+
+    private void HandleEliminatedChanged(bool wasEliminated, bool isEliminated)
+    {
+        UpdateAvatarAppearance();
+    }
+
+    /// <summary>
+    /// Server-side extension point for damage, ring-out or objective systems that
+    /// eliminate the player when the configured royal unit is the commander.
+    /// </summary>
+    public void ServerSetEliminated(bool eliminated)
+    {
+        if (IsSpawned && IsServer)
+        {
+            _isEliminated.Value = eliminated;
+        }
+    }
+
+    public void ServerResetForMatch()
+    {
+        if (IsSpawned && IsServer)
+        {
+            _isEliminated.Value = false;
+        }
     }
 
     private void UpdateAvatarAppearance()
@@ -338,12 +438,19 @@ public sealed class NetworkPlayer : NetworkBehaviour
             _avatarRenderer.sharedMaterial = _avatarMaterial;
         }
 
+        PlayerCommanderSettings playerSettings = ResolvePlayerSettings();
         Color teamColor = Team switch
         {
-            PlayerTeam.White => new Color(0.92f, 0.95f, 1f, 1f),
-            PlayerTeam.Black => new Color(0.08f, 0.12f, 0.2f, 1f),
-            _ => new Color(0.45f, 0.5f, 0.55f, 1f)
+            PlayerTeam.White => playerSettings?.WhiteAvatarColor ?? whiteAvatarColor,
+            PlayerTeam.Black => playerSettings?.BlackAvatarColor ?? blackAvatarColor,
+            _ => playerSettings?.UnassignedAvatarColor ?? unassignedAvatarColor
         };
+
+        if (_isEliminated.Value)
+        {
+            teamColor = Color.Lerp(teamColor, Color.gray, 0.75f);
+        }
+
         _avatarMaterial.color = teamColor;
     }
 
@@ -394,7 +501,7 @@ public sealed class NetworkPlayer : NetworkBehaviour
         }
 
         if (requestedTeam != PlayerTeam.Unassigned &&
-            CountOtherPlayersOnTeam(requestedTeam) >= MaxPlayersPerTeam)
+            CountOtherPlayersOnTeam(requestedTeam) >= ResolveMaximumPlayersPerTeam())
         {
             TeamSelectionResultRpc(false, requestedTeam);
             return;
@@ -485,7 +592,9 @@ public sealed class NetworkPlayer : NetworkBehaviour
 
         PlayerTeam assignedTeam;
 
-        if (whiteCount >= MaxPlayersPerTeam && blackCount >= MaxPlayersPerTeam)
+        int teamLimit = ResolveMaximumPlayersPerTeam();
+
+        if (whiteCount >= teamLimit && blackCount >= teamLimit)
         {
             Debug.LogWarning(
                 $"Could not automatically assign Player {OwnerClientId + 1:00}: " +
@@ -493,11 +602,11 @@ public sealed class NetworkPlayer : NetworkBehaviour
             return;
         }
 
-        if (whiteCount >= MaxPlayersPerTeam)
+        if (whiteCount >= teamLimit)
         {
             assignedTeam = PlayerTeam.Black;
         }
-        else if (blackCount >= MaxPlayersPerTeam)
+        else if (blackCount >= teamLimit)
         {
             assignedTeam = PlayerTeam.White;
         }
@@ -514,5 +623,17 @@ public sealed class NetworkPlayer : NetworkBehaviour
         Debug.Log(
             $"Automatically assigned Player {OwnerClientId + 1:00} to " +
             $"{assignedTeam} (White: {whiteCount}, Black: {blackCount}).");
+    }
+
+    private void OnValidate()
+    {
+        maximumPlayersPerTeam = Mathf.Max(1, maximumPlayersPerTeam);
+        avatarPoseUpdatesPerSecond = Mathf.Clamp(
+            avatarPoseUpdatesPerSecond,
+            1f,
+            60f);
+        avatarHeightInSquares = Mathf.Max(0.1f, avatarHeightInSquares);
+        avatarRadiusInSquares = Mathf.Max(0.01f, avatarRadiusInSquares);
+        maximumAvatarHeightInSquares = Mathf.Max(0f, maximumAvatarHeightInSquares);
     }
 }

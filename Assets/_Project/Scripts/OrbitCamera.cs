@@ -15,22 +15,22 @@ public sealed class OrbitCamera : MonoBehaviour
         Right
     }
 
-    [Header("Orbit Target")]
+    [Header("회전 중심 대상")]
     [SerializeField] private Transform target;
     [SerializeField, Min(0.01f)] private float distance = 10f;
     [SerializeField] private bool useStartingDistance = true;
 
-    [Header("Mouse Control")]
+    [Header("마우스 조작")]
     [SerializeField] private bool onlyWhileDragging = true;
     [SerializeField] private OrbitMouseButton dragButton = OrbitMouseButton.Right;
     [SerializeField, Min(0f)] private float sensitivity = 0.15f;
 
-    [Header("Zoom")]
+    [Header("확대 및 축소")]
     [SerializeField, Min(0f)] private float zoomSensitivity = 0.01f;
     [SerializeField, Min(0.01f)] private float minimumDistance = 3f;
     [SerializeField, Min(0.01f)] private float maximumDistance = 30f;
 
-    [Header("Vertical Limit")]
+    [Header("수직 각도 제한")]
     [SerializeField, Range(-89f, 89f)] private float minimumPitch = -20f;
     [SerializeField, Range(-89f, 89f)] private float maximumPitch = 80f;
 

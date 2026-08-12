@@ -72,3 +72,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::NetworkPlayer
   ShowTopMostFoldoutHeaderGroup: 1
+  maximumPlayersPerTeam: 2
+  avatarPoseUpdatesPerSecond: 20
+  avatarHeightInSquares: 0.68
+  avatarRadiusInSquares: 0.16
+  maximumAvatarHeightInSquares: 4
+  whiteAvatarColor: {r: 0.92, g: 0.95, b: 1, a: 1}
+  blackAvatarColor: {r: 0.08, g: 0.12, b: 0.2, a: 1}
+  unassignedAvatarColor: {r: 0.45, g: 0.5, b: 0.55, a: 1}

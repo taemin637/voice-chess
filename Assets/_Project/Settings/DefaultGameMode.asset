@@ -1,0 +1,304 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 31c662b1827d49efb1c8706c140bf14e, type: 3}
+  m_Name: DefaultGameMode
+  m_EditorClassIdentifier: Assembly-CSharp::GameModeConfiguration
+  displayName: Classic Voice Chess
+  clock:
+    mode: 1
+    durationSeconds: 60
+    timeLimitResolution: 1
+  commands:
+    mode: 0
+    voiceCommandVersion: 0
+    firstTeam: 1
+    advanceAfterAcceptedCommand: 1
+    freezeInactiveTeamMovement: 0
+    turnDurationSeconds: 0
+    costSystemEnabled: 1
+    startingCost: 3
+    maximumCost: 5
+    rechargeIntervalSeconds: 2
+    rechargeAmount: 1
+    moveForwardCost: 1
+    moveBackwardCost: 1
+    moveLeftCost: 1
+    moveRightCost: 1
+    moveUpperRightCost: 1
+    moveUpperLeftCost: 1
+    moveLowerRightCost: 1
+    moveLowerLeftCost: 1
+    turnLeftCost: 0.5
+    turnRightCost: 0.5
+    stopCost: 0
+    primarySkillCost: 2
+    secondarySkillCost: 2
+    chargeCost: 1
+    chargeLaserRangeInSquares: 30
+    chargeLaserVisibleSeconds: 0.2
+    chargeLaserWidthInSquares: 0.025
+    chargeLaserColor: {r: 1, g: 0.35, b: 0.08, a: 0.95}
+  victory:
+    endWhenRoyalEliminated: 1
+    royalUnitMode: 0
+    royalRequirement: 0
+    endWhenAllPiecesEliminated: 0
+    endAtCaptureScore: 0
+    captureScoreToWin: 100
+  collisions:
+    restitution: 1
+    impulseMultiplier: 1.5
+    separationEpsilon: 0.0001
+    playerCollisionHeight: 0.6
+    minimumPlayerImpactSpeed: 0.08
+    minimumPlayerImpactAlignment: 0.25
+    friendlyPiecesAreIntangible: 1
+  players:
+    maximumPlayersPerTeam: 2
+    avatarHeightInSquares: 0.68
+    avatarRadiusInSquares: 0.16
+    poseUpdatesPerSecond: 20
+    maximumPoseHeightInSquares: 4
+    whiteAvatarColor: {r: 0.92, g: 0.95, b: 1, a: 1}
+    blackAvatarColor: {r: 0.08, g: 0.12, b: 0.2, a: 1}
+    unassignedAvatarColor: {r: 0.45, g: 0.5, b: 0.55, a: 1}
+    moveSpeedInSquares: 5
+    mouseSensitivity: 0.08
+    minimumPitch: -75
+    maximumPitch: 75
+    eyeHeightAsPieceFraction: 0.5
+    collisionRadiusInSquares: 0.16
+    jumpSpeedInSquares: 4.2
+    gravityInSquares: 15
+    knockbackDrag: 2.2
+    endTurnKey: 2
+    confirmSelectionButton: 0
+  boardSetup:
+    useCustomStartingPosition: 0
+    customPlacements: []
+  pieceArchetypes:
+  - pieceType: 1
+    acceptsCommands: 1
+    movementMode: 0
+    movementControl: 1
+    moveSpeed: 1.2
+    turnSpeed: 90
+    quietFlickSpeed: 1.5
+    loudFlickSpeed: 5
+    flickFriction: 3.5
+    flickLoudnessExponent: 1.35
+    accumulateFlickImpulses: 1
+    maximumFlickSpeed: 8
+    mass: 0.8
+    collisionRadius: 0.34
+    knockbackDrag: 1.8
+    ringOutDistance: 0.8
+    commandCostMultiplier: 1
+    periodicCaptureIntervalSeconds: 1
+    periodicCapturePoints: 1
+    finalCaptureValue: 1
+    abilities: []
+  - pieceType: 2
+    acceptsCommands: 1
+    movementMode: 0
+    movementControl: 1
+    moveSpeed: 1.2
+    turnSpeed: 90
+    quietFlickSpeed: 1.5
+    loudFlickSpeed: 5
+    flickFriction: 3.5
+    flickLoudnessExponent: 1.35
+    accumulateFlickImpulses: 1
+    maximumFlickSpeed: 8
+    mass: 1.05
+    collisionRadius: 0.34
+    knockbackDrag: 1.8
+    ringOutDistance: 0.8
+    commandCostMultiplier: 1
+    periodicCaptureIntervalSeconds: 1.25
+    periodicCapturePoints: 2
+    finalCaptureValue: 3
+    abilities:
+    - {fileID: 11400000, guid: 8263840c09c14fa8be9c4ed348b411e6, type: 2}
+  - pieceType: 3
+    acceptsCommands: 1
+    movementMode: 0
+    movementControl: 1
+    moveSpeed: 1.2
+    turnSpeed: 90
+    quietFlickSpeed: 1.5
+    loudFlickSpeed: 5
+    flickFriction: 3.5
+    flickLoudnessExponent: 1.35
+    accumulateFlickImpulses: 1
+    maximumFlickSpeed: 8
+    mass: 0.95
+    collisionRadius: 0.34
+    knockbackDrag: 1.8
+    ringOutDistance: 0.8
+    commandCostMultiplier: 1
+    periodicCaptureIntervalSeconds: 1.5
+    periodicCapturePoints: 2
+    finalCaptureValue: 3
+    abilities: []
+  - pieceType: 4
+    acceptsCommands: 1
+    movementMode: 0
+    movementControl: 1
+    moveSpeed: 1.2
+    turnSpeed: 90
+    quietFlickSpeed: 1.5
+    loudFlickSpeed: 5
+    flickFriction: 3.5
+    flickLoudnessExponent: 1.35
+    accumulateFlickImpulses: 1
+    maximumFlickSpeed: 8
+    mass: 1.35
+    collisionRadius: 0.34
+    knockbackDrag: 1.8
+    ringOutDistance: 0.8
+    commandCostMultiplier: 1
+    periodicCaptureIntervalSeconds: 2
+    periodicCapturePoints: 3
+    finalCaptureValue: 5
+    abilities: []
+  - pieceType: 5
+    acceptsCommands: 1
+    movementMode: 0
+    movementControl: 1
+    moveSpeed: 1.2
+    turnSpeed: 90
+    quietFlickSpeed: 1.5
+    loudFlickSpeed: 5
+    flickFriction: 3.5
+    flickLoudnessExponent: 1.35
+    accumulateFlickImpulses: 1
+    maximumFlickSpeed: 8
+    mass: 1.15
+    collisionRadius: 0.34
+    knockbackDrag: 1.8
+    ringOutDistance: 0.8
+    commandCostMultiplier: 1
+    periodicCaptureIntervalSeconds: 2
+    periodicCapturePoints: 4
+    finalCaptureValue: 9
+    abilities: []
+  - pieceType: 6
+    acceptsCommands: 1
+    movementMode: 0
+    movementControl: 1
+    moveSpeed: 1.2
+    turnSpeed: 90
+    quietFlickSpeed: 1.5
+    loudFlickSpeed: 5
+    flickFriction: 3.5
+    flickLoudnessExponent: 1.35
+    accumulateFlickImpulses: 1
+    maximumFlickSpeed: 8
+    mass: 1.4
+    collisionRadius: 0.34
+    knockbackDrag: 1.8
+    ringOutDistance: 0
+    commandCostMultiplier: 1
+    periodicCaptureIntervalSeconds: 2.5
+    periodicCapturePoints: 5
+    finalCaptureValue: 10
+    abilities: []
+  captureMode:
+    enabled: 0
+    scoringRule: 0
+    resolveWinnerAtTimeLimit: 1
+    resetPeriodicTimerWhenLeaving: 1
+    zones:
+    - enabled: 1
+      displayName: Centre
+      boardPosition: {x: 3.5, y: 3.5}
+      radiusInSquares: 1.25
+      showFilledCircle: 1
+      fillColor: {r: 0.1, g: 0.75, b: 1, a: 0.16}
+      outlineColor: {r: 0.15, g: 0.9, b: 1, a: 0.95}
+      circleSegments: 64
+      outlineWidthInSquares: 0.035
+      heightOffsetInSquares: 0.015
+  presentation:
+    playRoyalDeathCinematic: 1
+    royalDeathDuration: 3
+    cameraDistanceInSquares: 2.6
+    cameraHeightInSquares: 1.15
+    dropDistanceInSquares: 4
+    outwardDistanceInSquares: 1.1
+    tiltAngle: 91
+    cameraFieldOfView: 48
+  boardPresentation:
+    whitePieces:
+      king: {fileID: 919132149155446097, guid: 3e5a738646aa87c40954abc295886aa5, type: 3}
+      queen: {fileID: 919132149155446097, guid: 267ef92fa52fd8946b1fd05c6ede3bc5, type: 3}
+      rook: {fileID: 919132149155446097, guid: bcbee1fd4e4cf1b49819703d99d51734, type: 3}
+      bishop: {fileID: 919132149155446097, guid: 9d64d031a3dcf5c4eaf5b21849703969, type: 3}
+      knight: {fileID: 919132149155446097, guid: a00f3bafaf92896469b110e2b833f959, type: 3}
+      pawn: {fileID: 919132149155446097, guid: b1e9283eb31d1084bbab15fd1c2ef2a0, type: 3}
+    blackPieces:
+      king: {fileID: 919132149155446097, guid: 7a3a7f6e0835fe045bd6737edfb36f37, type: 3}
+      queen: {fileID: 919132149155446097, guid: b5bcc70a50710274ea497c33ab2d32c0, type: 3}
+      rook: {fileID: 919132149155446097, guid: f1bd472207ebdf349a7fbb7c0b5e8313, type: 3}
+      bishop: {fileID: 919132149155446097, guid: 0b58674d53d4f3943b512859e6366e31, type: 3}
+      knight: {fileID: 919132149155446097, guid: a7209bef21ee8804891f3a83abd30261, type: 3}
+      pawn: {fileID: 919132149155446097, guid: f58f9e1e04977cc4ab92380e016856e4, type: 3}
+    anchor: 0
+    placementPlane: 0
+    layoutYawOffset: 0
+    fileSpacing: 0.1
+    rankSpacing: 0.1
+    heightOffset: 0
+    boardBorderWidthInSquares: 1.25
+    whiteRotationOffset: {x: 0, y: 180, z: 0}
+    blackRotationOffset: {x: 0, y: 0, z: 0}
+    ringOutVisualDistance: 0.8
+    ringOutDropDistance: 2.5
+    ringOutTiltAngle: 82
+    selectionMarkerColor: {r: 1, g: 0.8, b: 0, a: 1}
+    selectionMarkerSegments: 48
+    voiceHoverMarkerColor: {r: 0.1, g: 0.45, b: 1, a: 1}
+    confirmedVoiceMarkerColor: {r: 1, g: 0.38, b: 0.05, a: 1}
+    whiteHeadingArrowColor: {r: 0.1, g: 0.85, b: 1, a: 0.95}
+    blackHeadingArrowColor: {r: 1, g: 0.3, b: 0.15, a: 0.95}
+    headingArrowLengthInSquares: 0.72
+    headingArrowWidthInSquares: 0.065
+    headingArrowHeightInSquares: 0.025
+    generateOnStart: 1
+  voiceRecognition:
+    minimumConfidence: 0.55
+    quietCommandDecibels: -45
+    loudCommandDecibels: -12
+    minimumCommandReach: 1
+    maximumCommandReach: 12
+    voiceStartHoldSeconds: 0.08
+    voiceEndSilenceSeconds: 0.12
+    targetSwitchBoundarySilenceSeconds: 0.04
+    minimumTargetSwitchUtteranceSeconds: 0.3
+    maximumAutomaticUtteranceSeconds: 3
+    noiseCalibrationSeconds: 1.5
+    speechBoundaryAverageSeconds: 0.2
+    defaultInputMode: 0
+    defaultVoiceSensitivity: 0.55
+    defaultAutomaticNoiseCalibration: 1
+    defaultNoiseFloorDecibels: -55
+    pushToTalkKey: 36
+  interfaceAndSession:
+    designWidth: 1600
+    designHeight: 900
+    maximumSessionPlayers: 4
+    sessionListPollingIntervalSeconds: 5
+    matchTimerPanel: {x: 675, y: 30, width: 250, height: 78}
+    costPanel: {x: 30, y: 30, width: 360, height: 142}
+    captureScorePanel: {x: 575, y: 174, width: 450, height: 46}
+    pauseMenuKey: 60

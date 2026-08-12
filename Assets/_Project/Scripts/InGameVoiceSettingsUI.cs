@@ -6,13 +6,15 @@ using UnityEngine.SceneManagement;
 [DisallowMultipleComponent]
 public sealed class InGameVoiceSettingsUI : MonoBehaviour
 {
-    private const float DesignWidth = 1600f;
-    private const float DesignHeight = 900f;
+    [Header("음성 설정 UI 배치")]
+    [SerializeField, HideInInspector, Min(320f)] private float designWidth = 1600f;
+    [SerializeField, HideInInspector, Min(180f)] private float designHeight = 900f;
 
     private static InGameVoiceSettingsUI _instance;
     private readonly List<Texture2D> _generatedTextures = new();
 
     private AzureKoreanSpeechInput _speechInput;
+    private NetworkChessGame _game;
     private bool _pauseMenuOpen;
     private bool _open;
     private GUIStyle _panel;
@@ -68,7 +70,11 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
 
         Keyboard keyboard = Keyboard.current;
 
-        if (keyboard == null || !keyboard.escapeKey.wasPressedThisFrame)
+        Key pauseMenuKey = ResolveInterfaceSettings()?.PauseMenuKey ?? Key.Escape;
+
+        if (keyboard == null ||
+            pauseMenuKey == Key.None ||
+            !keyboard[pauseMenuKey].wasPressedThisFrame)
         {
             return;
         }
@@ -102,9 +108,13 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
         GUI.depth = -1500;
 
         Matrix4x4 previousMatrix = GUI.matrix;
-        float scale = Mathf.Min(Screen.width / DesignWidth, Screen.height / DesignHeight);
-        float offsetX = (Screen.width - DesignWidth * scale) * 0.5f;
-        float offsetY = (Screen.height - DesignHeight * scale) * 0.5f;
+        float resolvedDesignWidth = DesignWidth;
+        float resolvedDesignHeight = DesignHeight;
+        float scale = Mathf.Min(
+            Screen.width / resolvedDesignWidth,
+            Screen.height / resolvedDesignHeight);
+        float offsetX = (Screen.width - resolvedDesignWidth * scale) * 0.5f;
+        float offsetY = (Screen.height - resolvedDesignHeight * scale) * 0.5f;
         GUI.matrix = Matrix4x4.TRS(
             new Vector3(offsetX, offsetY, 0f),
             Quaternion.identity,
@@ -194,7 +204,7 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
 
         if (GUI.Button(
                 new Rect(600f, 222f, 190f, 48f),
-                "HOLD [V]",
+                $"HOLD [{_speechInput.PushToTalkKey}]",
                 _speechInput.InputMode == VoiceInputMode.PushToTalk
                     ? _buttonSelected
                     : _buttonDark))
@@ -451,6 +461,27 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
         _generatedTextures.Add(texture);
         return texture;
     }
+
+    private void OnValidate()
+    {
+        designWidth = Mathf.Max(320f, designWidth);
+        designHeight = Mathf.Max(180f, designHeight);
+    }
+
+    private InterfaceAndSessionSettings ResolveInterfaceSettings()
+    {
+        if (_game == null)
+        {
+            _game = FindFirstObjectByType<NetworkChessGame>();
+        }
+
+        return _game?.GameMode?.InterfaceAndSession;
+    }
+
+    private float DesignWidth =>
+        ResolveInterfaceSettings()?.DesignWidth ?? designWidth;
+    private float DesignHeight =>
+        ResolveInterfaceSettings()?.DesignHeight ?? designHeight;
 
     private void OnDestroy()
     {

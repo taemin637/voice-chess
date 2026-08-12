@@ -91,7 +91,7 @@ public struct NetworkChessPieceState :
 }
 
 [DisallowMultipleComponent]
-public sealed class NetworkChessGame : NetworkBehaviour
+public sealed partial class NetworkChessGame : NetworkBehaviour
 {
     private const int StartingPiecesPerTeam = 16;
 
@@ -100,30 +100,36 @@ public sealed class NetworkChessGame : NetworkBehaviour
         public readonly float Time;
         public readonly int PieceId;
         public readonly float DistanceInSquares;
+        public readonly bool HasChargeAim;
+        public readonly Vector2 ChargeAimBoardPosition;
 
         public LocalVoiceGazeSample(
             float time,
             int pieceId,
-            float distanceInSquares)
+            float distanceInSquares,
+            bool hasChargeAim,
+            Vector2 chargeAimBoardPosition)
         {
             Time = time;
             PieceId = pieceId;
             DistanceInSquares = distanceInSquares;
+            HasChargeAim = hasChargeAim;
+            ChargeAimBoardPosition = chargeAimBoardPosition;
         }
     }
 
     [SerializeField] private ChessPieceSpawner pieceSpawner;
 
-    [Header("Match Rules")]
+    [Header("경기 규칙")]
     [SerializeField, Min(1f)] private float matchDurationSeconds = 60f;
 
-    [Header("Voice Free Movement")]
+    [Header("음성 자유 이동")]
     [SerializeField, Min(0.05f)] private float voiceMoveSpeed = 0.85f;
     [SerializeField, Min(5f)] private float voiceTurnSpeed = 90f;
     [SerializeField, Range(0.05f, 1f)] private float quietVoiceSpeedMultiplier = 0.25f;
     [SerializeField, Range(1f, 3f)] private float loudVoiceSpeedMultiplier = 1.75f;
 
-    [Header("Piece Collision and Ring Out")]
+    [Header("기물 충돌 및 장외")]
     [Tooltip("Collision radius measured in chess-square units.")]
     [SerializeField, Range(0.2f, 0.49f)] private float pieceCollisionRadius = 0.36f;
     [Tooltip("How strongly pieces bounce apart. 0 is inelastic, 1 is fully elastic.")]
@@ -141,7 +147,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
     [Tooltip("How closely the contact must face the piece's travel direction. 0 is any forward contact, 1 is head-on only.")]
     [SerializeField, Range(0f, 1f)] private float minimumPlayerImpactAlignment = 0.25f;
 
-    [Header("King Death Cinematic")]
+    [Header("킹 사망 연출")]
     [SerializeField, Min(1f)] private float kingDeathCinematicDuration = 3f;
     [SerializeField, Min(0.5f)] private float kingDeathCameraDistanceInSquares = 2.6f;
     [SerializeField, Min(0.1f)] private float kingDeathCameraHeightInSquares = 1.15f;
@@ -199,14 +205,21 @@ public sealed class NetworkChessGame : NetworkBehaviour
     public PlayerTeam Winner => _winner.Value;
     public bool IsGameOver => _isGameOver.Value;
     public bool IsGameOverPresentationReady => _gameOverPresentationReady.Value;
-    public float MatchDurationSeconds => matchDurationSeconds;
+    public float MatchDurationSeconds => gameMode != null
+        ? gameMode.Clock.DurationSeconds
+        : matchDurationSeconds;
     public float RemainingTime
     {
         get
         {
+            if (!IsMatchClockEnabled)
+            {
+                return 0f;
+            }
+
             if (!_matchTimerRunning.Value || NetworkManager == null)
             {
-                return _isGameOver.Value ? 0f : matchDurationSeconds;
+                return _isGameOver.Value ? 0f : MatchDurationSeconds;
             }
 
             return Mathf.Max(
@@ -234,12 +247,15 @@ public sealed class NetworkChessGame : NetworkBehaviour
         _pieces.OnListChanged += HandlePiecesChanged;
         _isGameOver.OnValueChanged += HandleGameOverChanged;
         _visualRefreshPending = true;
+        RebuildCaptureZoneVisuals();
     }
 
     public override void OnNetworkDespawn()
     {
         _pieces.OnListChanged -= HandlePiecesChanged;
         _isGameOver.OnValueChanged -= HandleGameOverChanged;
+        CleanupCaptureZoneVisuals();
+        CleanupLocalChargeLaser();
         CleanupKingDeathCinematic();
         ClearLocalVoiceTarget();
     }
@@ -266,14 +282,6 @@ public sealed class NetworkChessGame : NetworkBehaviour
             return;
         }
 
-        if (!_isGameOver.Value &&
-            _matchTimerRunning.Value &&
-            NetworkPlayer.MatchStarted &&
-            NetworkManager.ServerTime.Time >= _matchEndServerTime.Value)
-        {
-            FinishMatchByPieceCount();
-        }
-
         if (_isGameOver.Value)
         {
             return;
@@ -287,9 +295,11 @@ public sealed class NetworkChessGame : NetworkBehaviour
         {
             NetworkChessPieceState piece = _pieces[index];
 
-            if (piece.VoiceTurnAxis != 0)
+            PieceArchetypeSettings pieceSettings = GetPieceSettings(piece.PieceType);
+
+            if (piece.VoiceTurnAxis != 0 && !ShouldFreezePieceMovement(piece.OwnerTeam))
             {
-                float turnSpeed = voiceTurnSpeed * GetVoiceSpeedMultiplier(
+                float turnSpeed = pieceSettings.TurnSpeed * GetVoiceSpeedMultiplier(
                     piece.VoiceTurnLoudness);
                 piece.VoiceHeading = Mathf.Repeat(
                     piece.VoiceHeading +
@@ -301,7 +311,10 @@ public sealed class NetworkChessGame : NetworkBehaviour
             Vector2 knockbackVelocity = new(
                 piece.KnockbackFileVelocity,
                 piece.KnockbackRankVelocity);
-            knockbackVelocity *= Mathf.Exp(-knockbackDrag * deltaTime);
+            knockbackVelocity = DeceleratePhysicalVelocity(
+                pieceSettings,
+                knockbackVelocity,
+                deltaTime);
 
             if (knockbackVelocity.sqrMagnitude < 0.0001f)
             {
@@ -322,6 +335,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
         ResolvePieceCollisions(simulatedPieces, commandedVelocities);
         RemoveRingedOutPieces(simulatedPieces);
         ApplySimulatedState(simulatedPieces);
+        ServerUpdateRuleState(deltaTime);
     }
 
     private void LateUpdate()
@@ -346,47 +360,17 @@ public sealed class NetworkChessGame : NetworkBehaviour
         }
 
         UpdateKingDeathCinematic();
+        UpdateLocalChargeLaserVisual();
     }
 
     private void InitializePieces(bool startMatchTimer)
     {
         _matchTimerRunning.Value = false;
-        _pieces.Clear();
-        ushort nextId = 0;
-        ChessPieceType[] backRank =
-        {
-            ChessPieceType.Rook,
-            ChessPieceType.Knight,
-            ChessPieceType.Bishop,
-            ChessPieceType.Queen,
-            ChessPieceType.King,
-            ChessPieceType.Bishop,
-            ChessPieceType.Knight,
-            ChessPieceType.Rook
-        };
-
-        for (int file = 0; file < 8; file++)
-        {
-            _pieces.Add(new NetworkChessPieceState(
-                nextId++, PlayerTeam.White, backRank[file], file, 0f));
-            _pieces.Add(new NetworkChessPieceState(
-                nextId++, PlayerTeam.White, ChessPieceType.Pawn, file, 1f));
-            _pieces.Add(new NetworkChessPieceState(
-                nextId++, PlayerTeam.Black, ChessPieceType.Pawn, file, 6f));
-            _pieces.Add(new NetworkChessPieceState(
-                nextId++, PlayerTeam.Black, backRank[file], file, 7f));
-        }
-
+        InitializeConfiguredPieces();
         _gameOverPresentationReady.Value = true;
         _winner.Value = PlayerTeam.Unassigned;
         _isGameOver.Value = false;
-
-        if (startMatchTimer)
-        {
-            _matchEndServerTime.Value =
-                NetworkManager.ServerTime.Time + matchDurationSeconds;
-            _matchTimerRunning.Value = true;
-        }
+        InitializeRuleState(startMatchTimer);
     }
 
     private void HandlePiecesChanged(
@@ -424,7 +408,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
         PlayerTeam opponent = GetOpponent(team);
         return Mathf.Max(
             0,
-            StartingPiecesPerTeam - GetRemainingPieceCount(opponent));
+            GetConfiguredInitialPieceCount(opponent) - GetRemainingPieceCount(opponent));
     }
 
     private void FinishMatchByPieceCount()
@@ -442,20 +426,43 @@ public sealed class NetworkChessGame : NetworkBehaviour
             winner = PlayerTeam.Black;
         }
 
-        _matchTimerRunning.Value = false;
-        _winner.Value = winner;
-        _isGameOver.Value = true;
-        _gameOverPresentationReady.Value = true;
+        EndMatch(winner, MatchEndReason.TimeExpired);
     }
 
     private Vector2 GetCommandedVelocity(NetworkChessPieceState piece)
     {
-        if (piece.VoiceMoveAxis == 0)
+        PieceArchetypeSettings settings = GetPieceSettings(piece.PieceType);
+
+        if (piece.VoiceMoveAxis == 0 ||
+            settings.MovementControl != PieceMovementControl.Continuous ||
+            ShouldFreezePieceMovement(piece.OwnerTeam) ||
+            settings.MovementMode == PieceMovementMode.Stationary)
         {
             return Vector2.zero;
         }
 
-        float moveSpeed = voiceMoveSpeed * GetVoiceSpeedMultiplier(
+        float relativeHeading = Mathf.DeltaAngle(0f, piece.VoiceMoveHeadingOffset);
+
+        if (settings.MovementMode == PieceMovementMode.ForwardOnly &&
+            Mathf.Abs(relativeHeading) > 45f)
+        {
+            return Vector2.zero;
+        }
+
+        if (settings.MovementMode == PieceMovementMode.ForwardAndBackward &&
+            Mathf.Abs(relativeHeading) > 45f &&
+            Mathf.Abs(Mathf.Abs(relativeHeading) - 180f) > 45f)
+        {
+            return Vector2.zero;
+        }
+
+        if (settings.MovementMode == PieceMovementMode.StrafeOnly &&
+            Mathf.Abs(Mathf.Abs(relativeHeading) - 90f) > 45f)
+        {
+            return Vector2.zero;
+        }
+
+        float moveSpeed = settings.MoveSpeed * GetVoiceSpeedMultiplier(
             piece.VoiceMoveLoudness);
         return GetVoiceMoveDirection(
                    piece.OwnerTeam,
@@ -467,9 +474,6 @@ public sealed class NetworkChessGame : NetworkBehaviour
         List<NetworkChessPieceState> pieces,
         List<Vector2> commandedVelocities)
     {
-        float minimumDistance = pieceCollisionRadius * 2f;
-        float minimumDistanceSquared = minimumDistance * minimumDistance;
-
         for (int leftIndex = 0; leftIndex < pieces.Count - 1; leftIndex++)
         {
             for (int rightIndex = leftIndex + 1; rightIndex < pieces.Count; rightIndex++)
@@ -479,6 +483,10 @@ public sealed class NetworkChessGame : NetworkBehaviour
                 Vector2 leftPosition = new(left.BoardFile, left.BoardRank);
                 Vector2 rightPosition = new(right.BoardFile, right.BoardRank);
                 Vector2 separation = rightPosition - leftPosition;
+                float minimumDistance =
+                    GetPieceSettings(left.PieceType).CollisionRadius +
+                    GetPieceSettings(right.PieceType).CollisionRadius;
+                float minimumDistanceSquared = minimumDistance * minimumDistance;
                 float distanceSquared = separation.sqrMagnitude;
 
                 if (distanceSquared >= minimumDistanceSquared)
@@ -487,11 +495,11 @@ public sealed class NetworkChessGame : NetworkBehaviour
                 }
 
                 float distance = Mathf.Sqrt(distanceSquared);
-                Vector2 normal = distance > 0.0001f
+                Vector2 normal = distance > ResolveSeparationEpsilon()
                     ? separation / distance
                     : GetStableCollisionNormal(left.Id, right.Id);
-                float leftInverseMass = 1f / GetPieceMass(left.PieceType);
-                float rightInverseMass = 1f / GetPieceMass(right.PieceType);
+                float leftInverseMass = 1f / GetPieceSettings(left.PieceType).Mass;
+                float rightInverseMass = 1f / GetPieceSettings(right.PieceType).Mass;
                 float inverseMassSum = leftInverseMass + rightInverseMass;
                 float penetration = minimumDistance - distance;
                 Vector2 correction = normal * (penetration / inverseMassSum);
@@ -508,8 +516,8 @@ public sealed class NetworkChessGame : NetworkBehaviour
                 if (closingSpeed < 0f)
                 {
                     float impulseMagnitude =
-                        -(1f + collisionRestitution) * closingSpeed /
-                        inverseMassSum * collisionImpulseMultiplier;
+                        -(1f + ResolveRestitution()) * closingSpeed /
+                        inverseMassSum * ResolveCollisionImpulseMultiplier();
                     Vector2 impulse = normal * impulseMagnitude;
                     leftVelocity -= impulse * leftInverseMass;
                     rightVelocity += impulse * rightInverseMass;
@@ -570,9 +578,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
         float boardMaximumEdge = pieceSpawner != null
             ? pieceSpawner.GroundMaximumCoordinate
             : 7.5f + ChessPieceSpawner.DefaultBoardBorderWidthInSquares;
-        float removalDistance = piece.PieceType == ChessPieceType.King
-            ? 0f
-            : ringOutDistance;
+        float removalDistance = GetPieceSettings(piece.PieceType).RingOutDistance;
         return piece.BoardFile < boardMinimumEdge - removalDistance ||
                piece.BoardFile > boardMaximumEdge + removalDistance ||
                piece.BoardRank < boardMinimumEdge - removalDistance ||
@@ -581,15 +587,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
     private void HandleRingOut(NetworkChessPieceState piece)
     {
-        if (piece.PieceType == ChessPieceType.King &&
-            !_isGameOver.Value)
-        {
-            _gameOverPresentationReady.Value = false;
-            BeginKingDeathCinematicRpc(piece);
-            _matchTimerRunning.Value = false;
-            _winner.Value = GetOpponent(piece.OwnerTeam);
-            _isGameOver.Value = true;
-        }
+        HandleConfiguredPieceRingOut(piece);
     }
 
     [Rpc(
@@ -690,7 +688,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
 
-        float duration = Mathf.Max(0.1f, kingDeathCinematicDuration);
+        float duration = ResolvePresentationDuration();
         float progress = Mathf.Clamp01(
             (Time.unscaledTime - _kingDeathCinematicStartTime) / duration);
         float easedProgress = Mathf.SmoothStep(0f, 1f, progress);
@@ -701,15 +699,15 @@ public sealed class NetworkChessGame : NetworkBehaviour
         Vector3 currentPosition =
             _kingDeathStartPosition +
             _kingDeathOutward *
-            (kingDeathOutwardDistanceInSquares * squareSize * easedProgress) -
+            (ResolvePresentationOutwardDistance() * squareSize * easedProgress) -
             boardUp *
-            (kingDeathDropDistanceInSquares * squareSize * progress * progress);
+            (ResolvePresentationDropDistance() * squareSize * progress * progress);
 
         if (_kingDeathVisual != null)
         {
             Vector3 tiltAxis = Vector3.Cross(_kingDeathOutward, boardUp).normalized;
             Quaternion tilt = Quaternion.AngleAxis(
-                kingDeathTiltAngle * easedProgress,
+                ResolvePresentationTiltAngle() * easedProgress,
                 tiltAxis);
             _kingDeathVisual.transform.SetPositionAndRotation(
                 currentPosition,
@@ -722,9 +720,9 @@ public sealed class NetworkChessGame : NetworkBehaviour
                 boardUp * (_kingDeathPieceHeight * 0.45f);
             Vector3 desiredCameraPosition = currentPosition -
                 _kingDeathOutward *
-                (kingDeathCameraDistanceInSquares * squareSize) +
+                (ResolvePresentationCameraDistance() * squareSize) +
                 boardUp *
-                (kingDeathCameraHeightInSquares * squareSize);
+                (ResolvePresentationCameraHeight() * squareSize);
             Quaternion desiredCameraRotation = Quaternion.LookRotation(
                 focusPoint - desiredCameraPosition,
                 boardUp);
@@ -744,7 +742,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
                     cameraBlend));
             _kingDeathCamera.fieldOfView = Mathf.Lerp(
                 _kingDeathOriginalFieldOfView,
-                kingDeathCameraFieldOfView,
+                ResolvePresentationFieldOfView(),
                 cameraBlend);
         }
 
@@ -822,20 +820,6 @@ public sealed class NetworkChessGame : NetworkBehaviour
         return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
     }
 
-    private static float GetPieceMass(ChessPieceType pieceType)
-    {
-        return pieceType switch
-        {
-            ChessPieceType.Pawn => 0.8f,
-            ChessPieceType.Knight => 1.05f,
-            ChessPieceType.Bishop => 0.95f,
-            ChessPieceType.Rook => 1.35f,
-            ChessPieceType.Queen => 1.15f,
-            ChessPieceType.King => 1.4f,
-            _ => 1f
-        };
-    }
-
     /// <summary>
     /// Resolves a local player capsule against enemy pieces without applying the
     /// opposite impulse to the pieces. This deliberately makes the much lighter
@@ -851,27 +835,28 @@ public sealed class NetworkChessGame : NetworkBehaviour
     {
         if (!IsSpawned ||
             playerTeam == PlayerTeam.Unassigned ||
-            playerBottomHeight >= playerPieceCollisionHeight)
+            playerBottomHeight >= ResolvePlayerCollisionHeight())
         {
             return false;
         }
 
         bool collided = false;
-        float minimumDistance = pieceCollisionRadius + Mathf.Max(0.01f, playerRadius);
-        float minimumDistanceSquared = minimumDistance * minimumDistance;
-
         for (int index = 0; index < _pieces.Count; index++)
         {
             NetworkChessPieceState piece = _pieces[index];
 
             // Friendly pieces are intentionally intangible to their own players.
-            if (piece.OwnerTeam == playerTeam)
+            if (piece.OwnerTeam == playerTeam && AreFriendlyPiecesIntangible())
             {
                 continue;
             }
 
             Vector2 piecePosition = new(piece.BoardFile, piece.BoardRank);
             Vector2 separation = playerPosition - piecePosition;
+            float minimumDistance =
+                GetPieceSettings(piece.PieceType).CollisionRadius +
+                Mathf.Max(0.01f, playerRadius);
+            float minimumDistanceSquared = minimumDistance * minimumDistance;
             float distanceSquared = separation.sqrMagnitude;
 
             if (distanceSquared >= minimumDistanceSquared)
@@ -882,7 +867,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
             float distance = Mathf.Sqrt(distanceSquared);
             Vector2 normal;
 
-            if (distance > 0.0001f)
+            if (distance > ResolveSeparationEpsilon())
             {
                 normal = separation / distance;
             }
@@ -914,13 +899,13 @@ public sealed class NetworkChessGame : NetworkBehaviour
             // into a stationary piece, approaching a moving piece from behind,
             // or hitting its side still resolves overlap but never bounces the
             // player away.
-            if (pieceSpeed >= minimumPlayerImpactSpeed &&
-                impactAlignment >= minimumPlayerImpactAlignment)
+            if (pieceSpeed >= ResolveMinimumPlayerImpactSpeed() &&
+                impactAlignment >= ResolveMinimumPlayerImpactAlignment())
             {
                 float pieceImpactSpeed = pieceSpeed * impactAlignment;
                 float targetOutwardSpeed = pieceImpactSpeed *
-                    (1f + collisionRestitution) *
-                    collisionImpulseMultiplier;
+                    (1f + ResolveRestitution()) *
+                    ResolveCollisionImpulseMultiplier();
                 float currentOutwardSpeed = Vector2.Dot(playerVelocity, normal);
 
                 if (currentOutwardSpeed < targetOutwardSpeed)
@@ -943,8 +928,30 @@ public sealed class NetworkChessGame : NetworkBehaviour
     {
         _localCommanderFile = commanderFile;
         _localCommanderRank = commanderRank;
-        _localVoiceTargetPieceId = pieceId.HasValue ? pieceId.Value : -1;
-        pieceSpawner?.SetVoiceSelectionTarget(pieceId);
+        _localHoveredPieceId = pieceId.HasValue ? pieceId.Value : -1;
+
+        if (ActiveVoiceCommandVersion == VoiceCommandVersion.ConfirmedSelectionCharge)
+        {
+            if (_localConfirmedPieceId >= 0 &&
+                FindPieceIndexById((ushort)_localConfirmedPieceId) < 0)
+            {
+                ClearLocalConfirmedSelection();
+            }
+
+            _localVoiceTargetPieceId = _localConfirmedPieceId;
+            pieceSpawner?.SetVoiceSelectionTarget(
+                _localHoveredPieceId >= 0 &&
+                _localHoveredPieceId != _localConfirmedPieceId
+                    ? (ushort)_localHoveredPieceId
+                    : null);
+        }
+        else
+        {
+            ClearLocalConfirmedSelection();
+            _localVoiceTargetPieceId = _localHoveredPieceId;
+            pieceSpawner?.SetVoiceSelectionTarget(pieceId);
+        }
+
         RecordLocalVoiceGazeSample();
     }
 
@@ -963,8 +970,39 @@ public sealed class NetworkChessGame : NetworkBehaviour
         out ushort pieceId,
         out float distanceInSquares)
     {
+        return TryGetLocalVoiceCommandSnapshotAt(
+            sampleTime,
+            out pieceId,
+            out distanceInSquares,
+            out _,
+            out _);
+    }
+
+    public bool TryGetLocalVoiceCommandSnapshot(
+        out ushort pieceId,
+        out float distanceInSquares,
+        out bool hasChargeAim,
+        out Vector2 chargeAimBoardPosition)
+    {
+        return TryGetLocalVoiceCommandSnapshotAt(
+            Time.unscaledTime,
+            out pieceId,
+            out distanceInSquares,
+            out hasChargeAim,
+            out chargeAimBoardPosition);
+    }
+
+    public bool TryGetLocalVoiceCommandSnapshotAt(
+        float sampleTime,
+        out ushort pieceId,
+        out float distanceInSquares,
+        out bool hasChargeAim,
+        out Vector2 chargeAimBoardPosition)
+    {
         pieceId = 0;
         distanceInSquares = 0f;
+        hasChargeAim = false;
+        chargeAimBoardPosition = default;
 
         if (_localVoiceGazeHistory.Count == 0)
         {
@@ -990,6 +1028,8 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
         pieceId = (ushort)sample.PieceId;
         distanceInSquares = sample.DistanceInSquares;
+        hasChargeAim = sample.HasChargeAim;
+        chargeAimBoardPosition = sample.ChargeAimBoardPosition;
         return true;
     }
 
@@ -1014,7 +1054,9 @@ public sealed class NetworkChessGame : NetworkBehaviour
         _localVoiceGazeHistory.Add(new LocalVoiceGazeSample(
             now,
             _localVoiceTargetPieceId,
-            distance));
+            distance,
+            _localChargeAimValid,
+            _localChargeAimBoardPosition));
 
         while (_localVoiceGazeHistory.Count > 0 &&
                now - _localVoiceGazeHistory[0].Time > 2f)
@@ -1049,6 +1091,8 @@ public sealed class NetworkChessGame : NetworkBehaviour
         float commandReachInSquares,
         float commandLoudness,
         PieceVoiceCommand command,
+        bool hasChargeAim,
+        Vector2 chargeAimBoardPosition,
         out string rejection)
     {
         rejection = string.Empty;
@@ -1080,6 +1124,15 @@ public sealed class NetworkChessGame : NetworkBehaviour
             return false;
         }
 
+        if (!CanIssueCommand(
+                localPlayer.Team,
+                _pieces[pieceIndex].PieceType,
+                command,
+                out rejection))
+        {
+            return false;
+        }
+
         if (command != PieceVoiceCommand.Stop &&
             _isGameOver.Value)
         {
@@ -1087,7 +1140,14 @@ public sealed class NetworkChessGame : NetworkBehaviour
             return false;
         }
 
-        if (commandReachInSquares + 0.05f < targetDistanceInSquares)
+        if (command == PieceVoiceCommand.Charge && !hasChargeAim)
+        {
+            rejection = "돌진 레이저가 기물, 플레이어, 보드 또는 경기장 벽에 닿지 않았습니다.";
+            return false;
+        }
+
+        if (command != PieceVoiceCommand.Charge &&
+            commandReachInSquares + 0.05f < targetDistanceInSquares)
         {
             rejection =
                 "목소리가 말까지 닿지 않습니다. 거리 " +
@@ -1102,7 +1162,21 @@ public sealed class NetworkChessGame : NetworkBehaviour
         RequestVoiceCommandRpc(
             pieceId,
             command,
-            Mathf.Clamp01(commandLoudness));
+            Mathf.Clamp01(commandLoudness),
+            hasChargeAim,
+            chargeAimBoardPosition.x,
+            chargeAimBoardPosition.y);
+
+        if (command == PieceVoiceCommand.Charge)
+        {
+            ShowLocalChargeLaser(chargeAimBoardPosition);
+        }
+
+        if (ActiveVoiceCommandVersion == VoiceCommandVersion.ConfirmedSelectionCharge)
+        {
+            ClearLocalConfirmedSelection(pieceId);
+        }
+
         return true;
     }
 
@@ -1113,6 +1187,9 @@ public sealed class NetworkChessGame : NetworkBehaviour
         ushort pieceId,
         PieceVoiceCommand command,
         float commandLoudness,
+        bool hasChargeAim,
+        float chargeTargetFile,
+        float chargeTargetRank,
         RpcParams rpcParams = default)
     {
         if (!NetworkPlayer.TryGetByClientId(
@@ -1131,30 +1208,79 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
         NetworkChessPieceState piece = _pieces[pieceIndex];
 
-        if (piece.OwnerTeam != player.Team ||
+        PieceArchetypeSettings pieceSettings = GetPieceSettings(piece.PieceType);
+
+        if (player.IsEliminated ||
+            piece.OwnerTeam != player.Team ||
             (command != PieceVoiceCommand.Stop &&
-             _isGameOver.Value))
+             _isGameOver.Value) ||
+            !CanIssueCommand(
+                player.Team,
+                piece.PieceType,
+                command,
+                out _))
         {
             return;
         }
 
         commandLoudness = Mathf.Clamp01(commandLoudness);
 
-        switch (command)
+        if (command == PieceVoiceCommand.Charge)
         {
-            case PieceVoiceCommand.MoveForward:
-                piece.VoiceMoveAxis = 1;
-                piece.VoiceMoveHeadingOffset = 0f;
-                piece.VoiceMoveLoudness = commandLoudness;
-                break;
-            case PieceVoiceCommand.MoveBackward:
-                piece.VoiceMoveAxis = 1;
-                piece.VoiceMoveHeadingOffset = 180f;
-                piece.VoiceMoveLoudness = commandLoudness;
-                break;
+            if (!hasChargeAim || pieceSpawner == null)
+            {
+                return;
+            }
+
+            Vector2 target = new(
+                Mathf.Clamp(
+                    chargeTargetFile,
+                    pieceSpawner.GroundMinimumCoordinate,
+                    pieceSpawner.GroundMaximumCoordinate),
+                Mathf.Clamp(
+                    chargeTargetRank,
+                    pieceSpawner.GroundMinimumCoordinate,
+                    pieceSpawner.GroundMaximumCoordinate));
+            Vector2 direction = target - new Vector2(
+                piece.BoardFile,
+                piece.BoardRank);
+
+            if (direction.sqrMagnitude < 0.0001f)
+            {
+                return;
+            }
+
+            piece.VoiceHeading = GetVoiceHeadingForDirection(
+                piece.OwnerTeam,
+                direction.normalized);
+            ApplyMovementCommand(
+                ref piece,
+                pieceSettings,
+                0f,
+                commandLoudness);
+        }
+        else if (TryGetMovementHeadingOffset(command, out float movementHeadingOffset))
+        {
+            ApplyMovementCommand(
+                ref piece,
+                pieceSettings,
+                movementHeadingOffset,
+                commandLoudness);
+        }
+        else
+        {
+            switch (command)
+            {
             case PieceVoiceCommand.Stop:
                 piece.VoiceMoveAxis = 0;
                 piece.VoiceTurnAxis = 0;
+
+                if (pieceSettings.MovementControl == PieceMovementControl.FlickImpulse)
+                {
+                    piece.KnockbackFileVelocity = 0f;
+                    piece.KnockbackRankVelocity = 0f;
+                }
+
                 break;
             case PieceVoiceCommand.TurnLeft:
                 piece.VoiceTurnAxis = -1;
@@ -1164,41 +1290,25 @@ public sealed class NetworkChessGame : NetworkBehaviour
                 piece.VoiceTurnAxis = 1;
                 piece.VoiceTurnLoudness = commandLoudness;
                 break;
-            case PieceVoiceCommand.MoveLeft:
-                piece.VoiceMoveAxis = 1;
-                piece.VoiceMoveHeadingOffset = -90f;
-                piece.VoiceMoveLoudness = commandLoudness;
-                break;
-            case PieceVoiceCommand.MoveRight:
-                piece.VoiceMoveAxis = 1;
-                piece.VoiceMoveHeadingOffset = 90f;
-                piece.VoiceMoveLoudness = commandLoudness;
-                break;
-            case PieceVoiceCommand.MoveUpperRight:
-                piece.VoiceMoveAxis = 1;
-                piece.VoiceMoveHeadingOffset = 45f;
-                piece.VoiceMoveLoudness = commandLoudness;
-                break;
-            case PieceVoiceCommand.MoveUpperLeft:
-                piece.VoiceMoveAxis = 1;
-                piece.VoiceMoveHeadingOffset = -45f;
-                piece.VoiceMoveLoudness = commandLoudness;
-                break;
-            case PieceVoiceCommand.MoveLowerRight:
-                piece.VoiceMoveAxis = 1;
-                piece.VoiceMoveHeadingOffset = 135f;
-                piece.VoiceMoveLoudness = commandLoudness;
-                break;
-            case PieceVoiceCommand.MoveLowerLeft:
-                piece.VoiceMoveAxis = 1;
-                piece.VoiceMoveHeadingOffset = -135f;
-                piece.VoiceMoveLoudness = commandLoudness;
+            case PieceVoiceCommand.SkillPrimary:
+            case PieceVoiceCommand.SkillSecondary:
+                if (!TryExecuteAbility(
+                        ref piece,
+                        pieceSettings,
+                        command,
+                        commandLoudness))
+                {
+                    return;
+                }
+
                 break;
             default:
                 return;
+            }
         }
 
         _pieces[pieceIndex] = piece;
+        AcceptCommand(player.Team, pieceSettings, command);
     }
 
     private bool TryGetLocalPlayer(out NetworkPlayer localPlayer)
@@ -1228,7 +1338,10 @@ public sealed class NetworkChessGame : NetworkBehaviour
     private void ClearLocalVoiceTarget()
     {
         _localVoiceTargetPieceId = -1;
+        _localHoveredPieceId = -1;
         _localVoiceGazeHistory.Clear();
+        ClearLocalConfirmedSelection();
+        ClearLocalChargeAim();
         pieceSpawner?.SetVoiceSelectionTarget(null);
         pieceSpawner?.SetVoiceCommandTarget(null);
     }
@@ -1249,6 +1362,16 @@ public sealed class NetworkChessGame : NetworkBehaviour
             -forward.x * sine + forward.y * cosine);
     }
 
+    private static float GetVoiceHeadingForDirection(
+        PlayerTeam team,
+        Vector2 direction)
+    {
+        direction.Normalize();
+        return team == PlayerTeam.Black
+            ? Mathf.Atan2(-direction.x, -direction.y) * Mathf.Rad2Deg
+            : Mathf.Atan2(direction.x, direction.y) * Mathf.Rad2Deg;
+    }
+
     private float GetVoiceSpeedMultiplier(float commandLoudness)
     {
         return Mathf.Lerp(
@@ -1266,6 +1389,7 @@ public sealed class NetworkChessGame : NetworkBehaviour
 
     private void OnValidate()
     {
+        _fallbackPieceSettings.Clear();
         matchDurationSeconds = Mathf.Max(1f, matchDurationSeconds);
         voiceMoveSpeed = Mathf.Max(0.05f, voiceMoveSpeed);
         voiceTurnSpeed = Mathf.Max(5f, voiceTurnSpeed);

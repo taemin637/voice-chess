@@ -14,7 +14,10 @@ public enum PieceVoiceCommand : byte
     MoveUpperRight,
     MoveUpperLeft,
     MoveLowerRight,
-    MoveLowerLeft
+    MoveLowerLeft,
+    SkillPrimary,
+    SkillSecondary,
+    Charge
 }
 
 public static class KoreanVoiceCommand
@@ -51,7 +54,17 @@ public static class KoreanVoiceCommand
         ["오른쪽위로가"] = PieceVoiceCommand.MoveUpperRight,
         ["왼쪽위로가"] = PieceVoiceCommand.MoveUpperLeft,
         ["오른쪽아래로가"] = PieceVoiceCommand.MoveLowerRight,
-        ["왼쪽아래로가"] = PieceVoiceCommand.MoveLowerLeft
+        ["왼쪽아래로가"] = PieceVoiceCommand.MoveLowerLeft,
+
+        ["주스킬사용"] = PieceVoiceCommand.SkillPrimary,
+        ["첫번째스킬"] = PieceVoiceCommand.SkillPrimary,
+        ["1번스킬"] = PieceVoiceCommand.SkillPrimary,
+        ["보조스킬사용"] = PieceVoiceCommand.SkillSecondary,
+        ["두번째스킬"] = PieceVoiceCommand.SkillSecondary,
+        ["2번스킬"] = PieceVoiceCommand.SkillSecondary,
+        ["돌진"] = PieceVoiceCommand.Charge,
+        ["돌진해"] = PieceVoiceCommand.Charge,
+        ["돌진해줘"] = PieceVoiceCommand.Charge
     };
 
     public static IReadOnlyCollection<string> PhraseHints { get; } = new[]
@@ -81,7 +94,16 @@ public static class KoreanVoiceCommand
         "오른쪽 위로 가",
         "왼쪽 위로 가",
         "오른쪽 아래로 가",
-        "왼쪽 아래로 가"
+        "왼쪽 아래로 가",
+        "주 스킬 사용",
+        "첫 번째 스킬",
+        "1번 스킬",
+        "보조 스킬 사용",
+        "두 번째 스킬",
+        "2번 스킬",
+        "돌진",
+        "돌진해",
+        "돌진해 줘"
     };
 
     public static bool TryParse(string recognizedText, out PieceVoiceCommand command)
@@ -104,6 +126,9 @@ public static class KoreanVoiceCommand
             PieceVoiceCommand.MoveUpperLeft => "왼쪽 위로 이동",
             PieceVoiceCommand.MoveLowerRight => "오른쪽 아래로 이동",
             PieceVoiceCommand.MoveLowerLeft => "왼쪽 아래로 이동",
+            PieceVoiceCommand.SkillPrimary => "주 스킬",
+            PieceVoiceCommand.SkillSecondary => "보조 스킬",
+            PieceVoiceCommand.Charge => "돌진",
             _ => command.ToString()
         };
     }

@@ -13,12 +13,12 @@ public sealed class JumpMapTestPlayer : MonoBehaviour
     [SerializeField, Range(-89f, 0f)] private float minimumPitch = -75f;
     [SerializeField, Range(0f, 89f)] private float maximumPitch = 75f;
 
-    [Header("Player Capsule")]
+    [Header("플레이어 캡슐")]
     [SerializeField, Min(0.01f)] private float capsuleHeight = 0.68f;
     [SerializeField, Min(0.01f)] private float capsuleRadius = 0.16f;
     [SerializeField, Min(0f)] private float eyeHeight = 0.5f;
 
-    [Header("View")]
+    [Header("시야")]
     [SerializeField] private Camera viewCamera;
 
     private CharacterController _characterController;
