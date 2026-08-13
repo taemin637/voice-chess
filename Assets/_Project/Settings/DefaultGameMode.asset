@@ -19,13 +19,16 @@ MonoBehaviour:
     timeLimitResolution: 1
   commands:
     mode: 0
-    voiceCommandVersion: 1
+    voiceCommandVersion: 2
     maximumConfirmedSelections: 3
+    proximitySelectionRadiusInSquares: 1.5
     firstTeam: 1
     advanceAfterAcceptedCommand: 1
     freezeInactiveTeamMovement: 0
     turnDurationSeconds: 0
-    costSystemEnabled: 1
+    commandRestrictionMode: 2
+    commandCooldownSeconds: 2
+    commandCooldownReticleDiameterPixels: 72
     startingCost: 3
     maximumCost: 5
     rechargeIntervalSeconds: 1
@@ -261,7 +264,7 @@ MonoBehaviour:
       outlineWidthInSquares: 0.035
       heightOffsetInSquares: 0.015
     randomRoundDurationSeconds: 15
-    randomRoundIntervalSeconds: 0.35
+    randomRoundIntervalSeconds: 5
     randomRoundScoreToWin: 3
     randomRadiusMinimumInSquares: 1.3
     randomRadiusMaximumInSquares: 1.3

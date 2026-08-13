@@ -165,11 +165,25 @@ public sealed partial class NetworkChessGame
     public VoiceCommandVersion ActiveVoiceCommandVersion => gameMode != null
         ? gameMode.Commands.VoiceCommandVersion
         : VoiceCommandVersion.LegacyLookSelection;
+    public bool UsesChargeSelectionCommand =>
+        ActiveVoiceCommandVersion == VoiceCommandVersion.ConfirmedSelectionCharge ||
+        ActiveVoiceCommandVersion == VoiceCommandVersion.ProximityAutoSelectionCharge;
+    public bool UsesManualConfirmedSelection =>
+        ActiveVoiceCommandVersion == VoiceCommandVersion.ConfirmedSelectionCharge;
+    public bool UsesProximityAutoSelection =>
+        ActiveVoiceCommandVersion == VoiceCommandVersion.ProximityAutoSelectionCharge;
     public CostConsumptionVersion ActiveCostConsumptionVersion => gameMode != null
         ? gameMode.Commands.CostConsumptionVersion
         : CostConsumptionVersion.FixedPerCommand;
     public bool IsCostSystemEnabled => gameMode != null &&
         gameMode.Commands.CostSystemEnabled;
+    public bool IsCommandCooldownEnabled => gameMode != null &&
+        gameMode.Commands.CooldownSystemEnabled;
+    public bool HasCommandRestriction =>
+        IsCostSystemEnabled || IsCommandCooldownEnabled;
+    public float CommandCooldownDuration => gameMode != null
+        ? gameMode.Commands.CommandCooldownSeconds
+        : 0f;
     public float MaximumCommandCost => gameMode != null
         ? gameMode.Commands.MaximumCost
         : 0f;
@@ -742,12 +756,13 @@ public sealed partial class NetworkChessGame
         ChessPieceType pieceType,
         PieceVoiceCommand command,
         out string rejection,
-        float voicedDurationSeconds = -1f)
+        float voicedDurationSeconds = -1f,
+        NetworkPlayer issuingPlayer = null)
     {
         rejection = string.Empty;
         PieceArchetypeSettings pieceSettings = GetPieceSettings(pieceType);
 
-        if (ActiveVoiceCommandVersion == VoiceCommandVersion.ConfirmedSelectionCharge &&
+        if (UsesChargeSelectionCommand &&
             command != PieceVoiceCommand.Charge)
         {
             rejection = "신규 명령 방식에서는 현재 ‘돌진’ 명령만 사용할 수 있습니다.";
@@ -802,6 +817,23 @@ public sealed partial class NetworkChessGame
         {
             rejection = $"현재는 {_activeCommandTeam.Value} 팀의 명령 차례입니다.";
             return false;
+        }
+
+        if (economy.CooldownSystemEnabled)
+        {
+            if (issuingPlayer == null)
+            {
+                rejection = "명령 쿨타임을 확인할 플레이어가 없습니다.";
+                return false;
+            }
+
+            float remainingCooldown = issuingPlayer.RemainingCommandCooldown;
+
+            if (remainingCooldown > 0.0001f)
+            {
+                rejection = $"명령 쿨타임 중입니다. {remainingCooldown:F1}초 남았습니다.";
+                return false;
+            }
         }
 
         if (economy.CostSystemEnabled)
@@ -959,7 +991,10 @@ public sealed partial class NetworkChessGame
                 ? gameMode.Commands.GetVoiceChargeCost(
                     voicedDurationSeconds,
                     selectedPieceCount)
-                : gameMode.Commands.GetBaseCost(PieceVoiceCommand.Charge);
+                : Mathf.Min(
+                    gameMode.Commands.MaximumCost,
+                    gameMode.Commands.GetBaseCost(PieceVoiceCommand.Charge) *
+                    Mathf.Max(1, selectedPieceCount));
         return Mathf.Max(1f, baseCost * pieceSettings.CommandCostMultiplier);
     }
 
@@ -1038,7 +1073,8 @@ public sealed partial class NetworkChessGame
         PlayerTeam team,
         PieceArchetypeSettings pieceSettings,
         PieceVoiceCommand command,
-        float acceptedCost = -1f)
+        float acceptedCost = -1f,
+        NetworkPlayer issuingPlayer = null)
     {
         if (gameMode == null)
         {
@@ -1065,6 +1101,12 @@ public sealed partial class NetworkChessGame
                     0f,
                     _blackCommandPoints.Value - cost);
             }
+        }
+
+        if (economy.CooldownSystemEnabled)
+        {
+            issuingPlayer?.ServerStartCommandCooldown(
+                economy.CommandCooldownSeconds);
         }
 
         if (economy.Mode == CommandIssuingMode.AlternatingTurns &&

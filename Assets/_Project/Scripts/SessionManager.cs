@@ -207,9 +207,16 @@ public sealed class SessionManager : MonoBehaviour
 
         NetworkPlayer localPlayer = NetworkPlayer.LocalPlayer;
 
-        if (localPlayer != null && chessGame.IsCostSystemEnabled)
+        if (localPlayer != null && chessGame.HasCommandRestriction)
         {
-            DrawCostHud(chessGame, localPlayer.Team);
+            if (chessGame.IsCommandCooldownEnabled)
+            {
+                DrawCommandCooldownHud(chessGame, localPlayer);
+            }
+            else
+            {
+                DrawCostHud(chessGame, localPlayer.Team);
+            }
         }
 
         if (chessGame.IsCaptureModeEnabled)
@@ -290,6 +297,48 @@ public sealed class SessionManager : MonoBehaviour
         GUI.Label(
             new Rect(panel.x + 24f, panel.y + 91f, panel.width - 48f, 32f),
             $"({current:0.##}/{maximum:0.##})",
+            _subtitle);
+    }
+
+    private void DrawCommandCooldownHud(
+        NetworkChessGame chessGame,
+        NetworkPlayer localPlayer)
+    {
+        Rect panel = InterfaceSettings?.CostPanel ?? new Rect(30f, 30f, 360f, 142f);
+        DrawShadowedPanel(panel, _panel);
+        GUI.Label(
+            new Rect(panel.x + 24f, panel.y + 13f, panel.width - 48f, 30f),
+            "COMMAND COOLDOWN",
+            _body);
+
+        float duration = Mathf.Max(0.01f, chessGame.CommandCooldownDuration);
+        float remaining = Mathf.Clamp(
+            localPlayer.RemainingCommandCooldown,
+            0f,
+            duration);
+        float readyProgress = 1f - remaining / duration;
+        Rect barBorder = new(panel.x + 24f, panel.y + 51f, panel.width - 48f, 30f);
+        GUI.Box(barBorder, GUIContent.none, _costBarBorder);
+        Rect barBackground = new(
+            barBorder.x + 3f,
+            barBorder.y + 3f,
+            barBorder.width - 6f,
+            barBorder.height - 6f);
+        GUI.Box(barBackground, GUIContent.none, _costBarBackground);
+
+        if (readyProgress > 0f)
+        {
+            Rect barFill = new(
+                barBackground.x,
+                barBackground.y,
+                barBackground.width * readyProgress,
+                barBackground.height);
+            GUI.Box(barFill, GUIContent.none, _costBarFill);
+        }
+
+        GUI.Label(
+            new Rect(panel.x + 24f, panel.y + 91f, panel.width - 48f, 32f),
+            remaining > 0.001f ? $"{remaining:0.0}s" : "READY",
             _subtitle);
     }
 

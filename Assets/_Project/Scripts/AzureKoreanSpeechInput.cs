@@ -1097,9 +1097,9 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         if (!outcome.HasVoiceTarget)
         {
             _game?.ClearLocalVoiceChargePreview();
-            _status = _game != null &&
-                _game.ActiveVoiceCommandVersion ==
-                    VoiceCommandVersion.ConfirmedSelectionCharge
+            _status = _game != null && _game.UsesProximityAutoSelection
+                ? "플레이어 주변 선택 범위 안에 아군 기물이 없습니다."
+                : _game != null && _game.UsesChargeSelectionCommand
                 ? $"{GetConfirmSelectionButtonName()}으로 확정 선택한 아군 말이 없습니다."
                 : "명령을 말하기 시작할 때 바라본 아군 말이 없었습니다.";
             return;
@@ -1128,7 +1128,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
             if (command == PieceVoiceCommand.Charge &&
                 economy != null &&
-                economy.UsesVoiceDurationCost &&
+                economy.UsesVoiceChargeScaling &&
                 _game != null)
             {
                 _game.UpdateLocalVoiceChargePreview(
@@ -1166,13 +1166,20 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         _game?.ClearLocalVoiceChargePreview();
         bool usedVoiceCharge = outcome.Commands.Contains(PieceVoiceCommand.Charge) &&
             economy != null &&
-            economy.UsesVoiceDurationCost;
+            economy.UsesVoiceChargeScaling;
+        string chargeRestriction = economy == null
+            ? string.Empty
+            : economy.CooldownSystemEnabled
+                ? $"쿨타임 {economy.CommandCooldownSeconds:0.##}초"
+                : economy.CostSystemEnabled
+                    ? $"코스트 {finalChargeCost:0.##}"
+                    : "명령 제한 없음";
         _status = usedVoiceCharge
             ? $"“{outcome.Text}” → {commandName} · " +
               $"발화 {outcome.SpeechDurationSeconds:F2}초 / " +
               $"발음 {finalPronunciationScore:P0} / " +
               $"세기 {finalChargePower:P0} / " +
-              $"예상 {finalChargeDistance:F1}칸 / 코스트 {finalChargeCost:0.##}"
+              $"예상 {finalChargeDistance:F1}칸 / {chargeRestriction}"
             : $"“{outcome.Text}” → {commandName} ({outcome.Confidence:P0}) · " +
               $"음량 {outcome.CommandLoudnessDecibels:F1} dBFS / " +
               $"전달 {outcome.CommandReachInSquares:F1}칸";

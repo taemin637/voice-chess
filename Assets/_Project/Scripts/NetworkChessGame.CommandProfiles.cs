@@ -6,6 +6,7 @@ public sealed partial class NetworkChessGame
     private int _localHoveredPieceId = -1;
     private int _localConfirmedPieceId = -1;
     private readonly List<ushort> _localConfirmedPieceIds = new();
+    private readonly List<ushort> _localProximityPieceIds = new();
     private bool _localChargeAimValid;
     private Vector2 _localChargeAimBoardPosition;
     private Vector3 _localChargeAimWorldPosition;
@@ -19,6 +20,9 @@ public sealed partial class NetworkChessGame
     private float _localVoiceChargePreviewCost;
     private float _localVoiceChargePreviewPower;
     private float _localVoiceChargePreviewDistance;
+    private GameObject _localProximitySelectionRangeObject;
+    private LineRenderer _localProximitySelectionRange;
+    private Material _localProximitySelectionRangeMaterial;
 
     public float LocalVoiceChargePreviewCost => _localVoiceChargePreviewCost;
     public float LocalVoiceChargePreviewPower => _localVoiceChargePreviewPower;
@@ -32,7 +36,7 @@ public sealed partial class NetworkChessGame
     {
         rejection = string.Empty;
 
-        if (ActiveVoiceCommandVersion != VoiceCommandVersion.ConfirmedSelectionCharge)
+        if (!UsesManualConfirmedSelection)
         {
             rejection = "확정 선택은 신규 명령 방식에서만 사용합니다.";
             return false;
@@ -100,6 +104,72 @@ public sealed partial class NetworkChessGame
         UpdateConfirmedSelectionState();
     }
 
+    private void UpdateLocalProximitySelection(
+        float commanderFile,
+        float commanderRank)
+    {
+        if (!UsesProximityAutoSelection ||
+            !TryGetLocalPlayer(out NetworkPlayer localPlayer) ||
+            localPlayer.IsEliminated ||
+            localPlayer.Team == PlayerTeam.Unassigned ||
+            !NetworkPlayer.MatchStarted ||
+            _isGameOver.Value)
+        {
+            ClearLocalConfirmedSelection();
+            HideLocalProximitySelectionRange();
+            return;
+        }
+
+        float radius = gameMode?.Commands.ProximitySelectionRadiusInSquares ?? 1.5f;
+        float radiusSquared = radius * radius;
+        _localProximityPieceIds.Clear();
+
+        for (int index = 0; index < _pieces.Count; index++)
+        {
+            NetworkChessPieceState piece = _pieces[index];
+
+            if (piece.OwnerTeam != localPlayer.Team)
+            {
+                continue;
+            }
+
+            float fileOffset = piece.BoardFile - commanderFile;
+            float rankOffset = piece.BoardRank - commanderRank;
+
+            if (fileOffset * fileOffset + rankOffset * rankOffset <= radiusSquared)
+            {
+                _localProximityPieceIds.Add(piece.Id);
+            }
+        }
+
+        bool selectionChanged =
+            _localProximityPieceIds.Count != _localConfirmedPieceIds.Count;
+
+        if (!selectionChanged)
+        {
+            for (int index = 0; index < _localProximityPieceIds.Count; index++)
+            {
+                if (_localProximityPieceIds[index] !=
+                    _localConfirmedPieceIds[index])
+                {
+                    selectionChanged = true;
+                    break;
+                }
+            }
+        }
+
+        if (selectionChanged)
+        {
+            ClearLocalVoiceChargePreview();
+            _localConfirmedPieceIds.Clear();
+            _localConfirmedPieceIds.AddRange(_localProximityPieceIds);
+            UpdateConfirmedSelectionState();
+        }
+
+        pieceSpawner?.SetVoiceSelectionTarget(null);
+        ShowLocalProximitySelectionRange(commanderFile, commanderRank, radius);
+    }
+
     private void ClearLocalConfirmedSelection()
     {
         ClearLocalVoiceChargePreview();
@@ -107,7 +177,7 @@ public sealed partial class NetworkChessGame
         _localConfirmedPieceId = -1;
         pieceSpawner?.SetConfirmedVoiceSelectionTargets(_localConfirmedPieceIds);
 
-        if (ActiveVoiceCommandVersion == VoiceCommandVersion.ConfirmedSelectionCharge)
+        if (UsesChargeSelectionCommand)
         {
             _localVoiceTargetPieceId = -1;
         }
@@ -123,7 +193,7 @@ public sealed partial class NetworkChessGame
 
     public void UpdateLocalChargeAim(Ray viewRay, PlayerTeam localTeam)
     {
-        if (ActiveVoiceCommandVersion != VoiceCommandVersion.ConfirmedSelectionCharge ||
+        if (!UsesChargeSelectionCommand ||
             !TryResolveLocalChargeAim(
                 viewRay,
                 localTeam,
@@ -348,8 +418,8 @@ public sealed partial class NetworkChessGame
         CommandEconomySettings settings = gameMode?.Commands;
 
         if (settings == null ||
-            !settings.UsesVoiceDurationCost ||
-            ActiveVoiceCommandVersion != VoiceCommandVersion.ConfirmedSelectionCharge ||
+            !settings.UsesVoiceChargeScaling ||
+            !UsesChargeSelectionCommand ||
             _localConfirmedPieceIds.Count == 0)
         {
             ClearLocalVoiceChargePreview();
@@ -488,6 +558,98 @@ public sealed partial class NetworkChessGame
         }
     }
 
+    private void ShowLocalProximitySelectionRange(
+        float commanderFile,
+        float commanderRank,
+        float radiusInSquares)
+    {
+        if (pieceSpawner == null)
+        {
+            HideLocalProximitySelectionRange();
+            return;
+        }
+
+        EnsureLocalProximitySelectionRange();
+
+        if (_localProximitySelectionRange == null)
+        {
+            return;
+        }
+
+        BoardPresentationSettings presentation = gameMode?.BoardPresentation;
+        int segments = presentation?.SelectionMarkerSegments ?? 48;
+        Color color = presentation?.ConfirmedVoiceMarkerColor ??
+            new Color(1f, 0.38f, 0.05f, 1f);
+        float squareSize = Mathf.Min(pieceSpawner.FileSpacing, pieceSpawner.RankSpacing);
+        Vector3 centre = pieceSpawner.GetBoardWorldPosition(
+            commanderFile,
+            commanderRank) + pieceSpawner.BoardUp * (squareSize * 0.02f);
+        _localProximitySelectionRange.positionCount = segments;
+        _localProximitySelectionRange.startWidth = squareSize * 0.025f;
+        _localProximitySelectionRange.endWidth = squareSize * 0.025f;
+        _localProximitySelectionRange.startColor = color;
+        _localProximitySelectionRange.endColor = color;
+
+        if (_localProximitySelectionRangeMaterial != null)
+        {
+            _localProximitySelectionRangeMaterial.color = color;
+        }
+
+        for (int index = 0; index < segments; index++)
+        {
+            float angle = index * Mathf.PI * 2f / segments;
+            Vector3 point = centre +
+                pieceSpawner.BoardRight *
+                (Mathf.Cos(angle) * radiusInSquares * pieceSpawner.FileSpacing) +
+                pieceSpawner.BoardForward *
+                (Mathf.Sin(angle) * radiusInSquares * pieceSpawner.RankSpacing);
+            _localProximitySelectionRange.SetPosition(index, point);
+        }
+
+        _localProximitySelectionRangeObject.SetActive(true);
+    }
+
+    private void EnsureLocalProximitySelectionRange()
+    {
+        if (_localProximitySelectionRangeObject != null)
+        {
+            return;
+        }
+
+        _localProximitySelectionRangeObject = new GameObject(
+            "Local Proximity Selection Range");
+        _localProximitySelectionRange =
+            _localProximitySelectionRangeObject.AddComponent<LineRenderer>();
+        _localProximitySelectionRange.useWorldSpace = true;
+        _localProximitySelectionRange.loop = true;
+        _localProximitySelectionRange.numCornerVertices = 4;
+        _localProximitySelectionRange.numCapVertices = 4;
+        _localProximitySelectionRange.shadowCastingMode =
+            UnityEngine.Rendering.ShadowCastingMode.Off;
+        _localProximitySelectionRange.receiveShadows = false;
+        Shader shader = Shader.Find("Sprites/Default");
+
+        if (shader == null)
+        {
+            shader = Shader.Find("Unlit/Color");
+        }
+
+        if (shader != null)
+        {
+            _localProximitySelectionRangeMaterial = new Material(shader);
+            _localProximitySelectionRange.sharedMaterial =
+                _localProximitySelectionRangeMaterial;
+        }
+    }
+
+    private void HideLocalProximitySelectionRange()
+    {
+        if (_localProximitySelectionRangeObject != null)
+        {
+            _localProximitySelectionRangeObject.SetActive(false);
+        }
+    }
+
     private void ShowLocalChargeLaser(Vector2 targetBoardPosition)
     {
         if (pieceSpawner == null)
@@ -559,6 +721,7 @@ public sealed partial class NetworkChessGame
     private void CleanupLocalChargeLaser()
     {
         ClearLocalVoiceChargePreview();
+        HideLocalProximitySelectionRange();
 
         if (_localChargeLaserObject != null)
         {
@@ -584,6 +747,19 @@ public sealed partial class NetworkChessGame
         {
             Destroy(_localVoiceChargeArrowMaterial);
             _localVoiceChargeArrowMaterial = null;
+        }
+
+        if (_localProximitySelectionRangeObject != null)
+        {
+            Destroy(_localProximitySelectionRangeObject);
+            _localProximitySelectionRangeObject = null;
+            _localProximitySelectionRange = null;
+        }
+
+        if (_localProximitySelectionRangeMaterial != null)
+        {
+            Destroy(_localProximitySelectionRangeMaterial);
+            _localProximitySelectionRangeMaterial = null;
         }
     }
 }

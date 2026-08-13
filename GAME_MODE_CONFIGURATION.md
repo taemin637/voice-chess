@@ -46,7 +46,10 @@
   - 자기 킹이 죽어 있는 동안 카메라는 체스판 중앙 위에서 수직 아래를 바라보고 입력을 받지 않는다. 화면 중앙에는 부활까지 남은 초 숫자만 표시한다. **King Respawn Camera Height In Squares**, **King Respawn Countdown Font Size/Color**로 화면을 조절한다.
   - 점령전이 꺼져 있거나 킹 부활 스위치를 끄면 기존 **Victory > End When Royal Eliminated** 규칙이 그대로 적용된다.
 - 턴제 명령: **Commands > Mode**를 `Alternating Turns`로 바꾼다. 첫 팀, 턴 시간, 명령 후 자동 턴 넘김, 비활성 팀 이동 정지를 설정할 수 있다. 수동 턴 종료 키는 **Players > End Turn Key**에서 정한다.
-- 코스트 시스템: **Commands > Cost System Enabled**로 독립적으로 켜고 끈다. 실시간 명령과 턴제 양쪽에 조합할 수 있다.
+- 명령 제한 방식: **Commands > Command Restriction Mode**에서 `없음`, `코스트`, `쿨타임` 중 하나를 고른다. 실시간 명령과 턴제 양쪽에 조합할 수 있다.
+  - `쿨타임`은 명령 성공 뒤 **Command Cooldown Seconds** 동안 해당 플레이어의 다음 명령을 막는다. 기본값은 2초이며 코스트를 소모하거나 충전하지 않는다. 경기 화면 왼쪽 위에는 남은 시간과 `READY` 상태가 표시된다. 쿨타임 중에는 중앙 조준점 주위에도 원형 게이지가 차오르며, 완료되면 사라진다. 원 크기는 **Command Cooldown Reticle Diameter Pixels**에서 조절한다.
+  - 쿨타임 방식에서도 돌진은 발화 시간·음량·발음 정확도에 따른 충전 세기와 이동 거리 계산을 그대로 사용한다.
+  - 아래 항목은 `코스트`를 선택했을 때 적용된다.
   - **Starting Cost / Maximum Cost**: 경기 시작 코스트와 보유 상한을 정한다.
   - **Recharge Interval Seconds / Recharge Amount**: “몇 초마다 몇 코스트”가 들어오는지 정한다. 예를 들어 `2 / 1`이면 2초마다 1코스트가 충전된다.
   - **Cost Per Command**: 전진·후진·좌우·대각선·회전·정지·주 스킬·보조 스킬 비용을 각각 정한다. 실제 비용에는 기물별 **Command Cost Multiplier**와 Ability의 **Additional Command Cost**도 반영된다.

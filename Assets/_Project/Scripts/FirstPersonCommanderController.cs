@@ -579,8 +579,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
 
         _game.UpdateLocalVoiceGazeTarget(pieceId, _file, _rank);
 
-        if (_game.ActiveVoiceCommandVersion ==
-                VoiceCommandVersion.ConfirmedSelectionCharge &&
+        if (_game.UsesManualConfirmedSelection &&
             Mouse.current != null &&
             WasConfirmSelectionPressed(
                 Mouse.current,
@@ -618,6 +617,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
             return;
         }
 
+        DrawCommandCooldownReticle();
         Rect shadow = new(Screen.width * 0.5f - 2f, Screen.height * 0.5f - 2f, 5f, 5f);
         GUI.color = new Color(0f, 0f, 0f, 0.8f);
         GUI.DrawTexture(shadow, Texture2D.whiteTexture);
@@ -625,6 +625,63 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         GUI.color = Color.white;
         GUI.DrawTexture(dot, Texture2D.whiteTexture);
         GUI.color = Color.white;
+    }
+
+    private void DrawCommandCooldownReticle()
+    {
+        NetworkPlayer localPlayer = NetworkPlayer.LocalPlayer;
+        CommandEconomySettings settings = _game?.GameMode?.Commands;
+
+        if (localPlayer == null ||
+            settings == null ||
+            !settings.CooldownSystemEnabled)
+        {
+            return;
+        }
+
+        float remaining = localPlayer.RemainingCommandCooldown;
+
+        if (remaining <= 0.001f)
+        {
+            return;
+        }
+
+        float duration = settings.CommandCooldownSeconds;
+        float readyProgress = 1f - Mathf.Clamp01(remaining / duration);
+        float diameter = settings.CommandCooldownReticleDiameterPixels;
+        float radius = diameter * 0.5f;
+        float thickness = Mathf.Clamp(diameter * 0.075f, 3f, 10f);
+        int segments = Mathf.Clamp(
+            Mathf.CeilToInt(Mathf.PI * diameter / Mathf.Max(2f, thickness * 0.7f)),
+            48,
+            128);
+        int readySegments = Mathf.FloorToInt(readyProgress * segments);
+        float segmentArcLength = Mathf.PI * diameter / segments * 1.18f;
+        Vector2 centre = new(Screen.width * 0.5f, Screen.height * 0.5f);
+        Rect segmentRect = new(
+            centre.x - segmentArcLength * 0.5f,
+            centre.y - radius - thickness * 0.5f,
+            segmentArcLength,
+            thickness);
+        Matrix4x4 originalMatrix = GUI.matrix;
+        Color originalColor = GUI.color;
+        Color backgroundColor = new(0f, 0f, 0f, 0.38f);
+        Color progressColor = new(1f, 0.38f, 0.05f, 0.95f);
+
+        for (int index = 0; index < segments; index++)
+        {
+            GUI.matrix = originalMatrix;
+            GUIUtility.RotateAroundPivot(
+                index * 360f / segments,
+                centre);
+            GUI.color = index < readySegments
+                ? progressColor
+                : backgroundColor;
+            GUI.DrawTexture(segmentRect, Texture2D.whiteTexture);
+        }
+
+        GUI.matrix = originalMatrix;
+        GUI.color = originalColor;
     }
 
     private void DrawCaptureRespawnCountdown(float remaining)

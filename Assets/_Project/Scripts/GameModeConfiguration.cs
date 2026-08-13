@@ -12,10 +12,12 @@ public enum CommandIssuingMode : byte
 
 public enum VoiceCommandVersion : byte
 {
-    [InspectorName("Legacy - Look To Select")]
+    [InspectorName("1 - 시선 선택")]
     LegacyLookSelection,
-    [InspectorName("New - Click Lock + Charge")]
-    ConfirmedSelectionCharge
+    [InspectorName("2 - 클릭 확정 선택 + 돌진")]
+    ConfirmedSelectionCharge,
+    [InspectorName("3 - 플레이어 주변 자동 선택 + 돌진")]
+    ProximityAutoSelectionCharge
 }
 
 public enum CostConsumptionVersion : byte
@@ -24,6 +26,16 @@ public enum CostConsumptionVersion : byte
     FixedPerCommand,
     [InspectorName("신버전 - 발화 시간 비례 코스트")]
     VoiceDurationCharge
+}
+
+public enum CommandRestrictionMode : byte
+{
+    [InspectorName("없음")]
+    None,
+    [InspectorName("코스트")]
+    Cost,
+    [InspectorName("쿨타임")]
+    Cooldown
 }
 
 public enum MatchClockMode : byte
@@ -136,15 +148,27 @@ public sealed class CommandEconomySettings
     [Tooltip("신규 명령 방식에서 동시에 확정 선택할 수 있는 기물 수입니다.")]
     [SerializeField, Range(1, 3)] private int maximumConfirmedSelections = 3;
 
+    [Header("3번 선택 방식")]
+    [Tooltip("플레이어를 중심으로 이 반지름 안에 있는 아군 기물을 모두 자동 선택합니다. 체스 칸 단위입니다.")]
+    [SerializeField, Min(0.05f)]
+    private float proximitySelectionRadiusInSquares = 1.5f;
+
     [Header("교대 턴제")]
     [SerializeField] private PlayerTeam firstTeam = PlayerTeam.White;
     [SerializeField] private bool advanceAfterAcceptedCommand = true;
     [SerializeField] private bool freezeInactiveTeamMovement;
     [SerializeField, Min(0f)] private float turnDurationSeconds;
 
-    [Header("코스트 시스템")]
-    [Tooltip("Independent master switch. It can be combined with real-time or alternating-turn commands.")]
-    [SerializeField] private bool costSystemEnabled;
+    [Header("명령 제한 방식")]
+    [Tooltip("없음, 충전식 코스트, 명령 후 쿨타임 중 하나를 선택합니다.")]
+    [FormerlySerializedAs("costSystemEnabled")]
+    [SerializeField] private CommandRestrictionMode commandRestrictionMode =
+        CommandRestrictionMode.Cost;
+    [Tooltip("쿨타임 방식에서 명령 성공 후 다음 명령까지 기다리는 시간입니다.")]
+    [SerializeField, Min(0.01f)] private float commandCooldownSeconds = 2f;
+    [Tooltip("중앙 조준점에 표시되는 원형 쿨타임 게이지의 지름입니다. 화면 픽셀 단위입니다.")]
+    [SerializeField, Min(16f)]
+    private float commandCooldownReticleDiameterPixels = 72f;
     [FormerlySerializedAs("startingPoints")]
     [SerializeField, Min(0f)] private float startingCost = 3f;
     [FormerlySerializedAs("maximumPoints")]
@@ -232,11 +256,24 @@ public sealed class CommandEconomySettings
     public VoiceCommandVersion VoiceCommandVersion => voiceCommandVersion;
     public int MaximumConfirmedSelections =>
         Mathf.Clamp(maximumConfirmedSelections, 1, 3);
+    public float ProximitySelectionRadiusInSquares =>
+        Mathf.Max(0.05f, proximitySelectionRadiusInSquares);
     public CostConsumptionVersion CostConsumptionVersion => costConsumptionVersion;
     public bool UsesVoiceDurationCost =>
         costConsumptionVersion == CostConsumptionVersion.VoiceDurationCharge;
-    public bool CostSystemEnabled => costSystemEnabled ||
-        UsesLegacyRegeneratingPointsMode;
+    public bool UsesVoiceChargeScaling =>
+        UsesVoiceDurationCost || CooldownSystemEnabled;
+    public CommandRestrictionMode RestrictionMode =>
+        UsesLegacyRegeneratingPointsMode
+            ? CommandRestrictionMode.Cost
+            : commandRestrictionMode;
+    public bool CostSystemEnabled =>
+        RestrictionMode == CommandRestrictionMode.Cost;
+    public bool CooldownSystemEnabled =>
+        RestrictionMode == CommandRestrictionMode.Cooldown;
+    public float CommandCooldownSeconds => Mathf.Max(0.01f, commandCooldownSeconds);
+    public float CommandCooldownReticleDiameterPixels =>
+        Mathf.Max(16f, commandCooldownReticleDiameterPixels);
     public PlayerTeam FirstTeam =>
         firstTeam == PlayerTeam.Black ? PlayerTeam.Black : PlayerTeam.White;
     public bool AdvanceAfterAcceptedCommand => advanceAfterAcceptedCommand;
@@ -399,15 +436,22 @@ public sealed class CommandEconomySettings
             maximumConfirmedSelections,
             1,
             3);
+        proximitySelectionRadiusInSquares = Mathf.Max(
+            0.05f,
+            proximitySelectionRadiusInSquares);
 
         if (UsesLegacyRegeneratingPointsMode)
         {
             mode = CommandIssuingMode.RealTime;
-            costSystemEnabled = true;
+            commandRestrictionMode = CommandRestrictionMode.Cost;
             rechargeIntervalSeconds = 1f;
         }
 
         turnDurationSeconds = Mathf.Max(0f, turnDurationSeconds);
+        commandCooldownSeconds = Mathf.Max(0.01f, commandCooldownSeconds);
+        commandCooldownReticleDiameterPixels = Mathf.Max(
+            16f,
+            commandCooldownReticleDiameterPixels);
         maximumCost = Mathf.Max(0.01f, maximumCost);
         startingCost = Mathf.Clamp(startingCost, 0f, maximumCost);
         rechargeIntervalSeconds = Mathf.Max(0.01f, rechargeIntervalSeconds);

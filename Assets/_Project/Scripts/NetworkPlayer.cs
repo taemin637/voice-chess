@@ -54,6 +54,11 @@ public sealed class NetworkPlayer : NetworkBehaviour
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    private readonly NetworkVariable<double> _commandReadyServerTime = new(
+        0d,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     private string _selectionStatus = "Choose a team.";
     private ChessPieceSpawner _pieceSpawner;
     private NetworkChessGame _chessGame;
@@ -82,6 +87,12 @@ public sealed class NetworkPlayer : NetworkBehaviour
                 0f,
                 (float)(_captureRespawnEndServerTime.Value -
                     NetworkManager.ServerTime.Time));
+    public float RemainingCommandCooldown => NetworkManager == null
+        ? 0f
+        : Mathf.Max(
+            0f,
+            (float)(_commandReadyServerTime.Value -
+                NetworkManager.ServerTime.Time));
     public Vector3 AvatarBoardPose => IsOwner && _hasLocalAvatarPose
         ? _localAvatarBoardPose
         : _avatarBoardPose.Value;
@@ -723,7 +734,17 @@ public sealed class NetworkPlayer : NetworkBehaviour
         {
             _isEliminated.Value = false;
             _captureRespawnEndServerTime.Value = 0d;
+            _commandReadyServerTime.Value = 0d;
             _serverAvatarRingOutStarted = false;
+        }
+    }
+
+    public void ServerStartCommandCooldown(float durationSeconds)
+    {
+        if (IsSpawned && IsServer && NetworkManager != null)
+        {
+            _commandReadyServerTime.Value = NetworkManager.ServerTime.Time +
+                Mathf.Max(0f, durationSeconds);
         }
     }
 

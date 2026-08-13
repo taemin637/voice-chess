@@ -1001,7 +1001,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
         _localCommanderRank = commanderRank;
         _localHoveredPieceId = pieceId.HasValue ? pieceId.Value : -1;
 
-        if (ActiveVoiceCommandVersion == VoiceCommandVersion.ConfirmedSelectionCharge)
+        if (UsesManualConfirmedSelection)
         {
             PruneLocalConfirmedSelections();
 
@@ -1012,9 +1012,15 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                     ? (ushort)_localHoveredPieceId
                     : null);
         }
+        else if (UsesProximityAutoSelection)
+        {
+            UpdateLocalProximitySelection(commanderFile, commanderRank);
+            _localHoveredPieceId = -1;
+        }
         else
         {
             ClearLocalConfirmedSelection();
+            HideLocalProximitySelectionRange();
             _localVoiceTargetPieceId = _localHoveredPieceId;
             pieceSpawner?.SetVoiceSelectionTarget(pieceId);
         }
@@ -1227,7 +1233,8 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 _pieces[pieceIndex].PieceType,
                 command,
                 out rejection,
-                voicedDurationSeconds))
+                voicedDurationSeconds,
+                localPlayer))
         {
             return false;
         }
@@ -1246,11 +1253,10 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
         }
 
         if (command == PieceVoiceCommand.Charge &&
-            ActiveVoiceCommandVersion ==
-            VoiceCommandVersion.ConfirmedSelectionCharge &&
+            UsesChargeSelectionCommand &&
             _localConfirmedPieceIds.Count > 0)
         {
-            int selectionCount = Mathf.Min(3, _localConfirmedPieceIds.Count);
+            int selectionCount = _localConfirmedPieceIds.Count;
             float totalCost = GetVoiceChargeCost(
                 _pieces[pieceIndex].PieceType,
                 voicedDurationSeconds,
@@ -1265,24 +1271,42 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 return false;
             }
 
-            ushort first = _localConfirmedPieceIds[0];
-            ushort second = selectionCount > 1
-                ? _localConfirmedPieceIds[1]
-                : ushort.MaxValue;
-            ushort third = selectionCount > 2
-                ? _localConfirmedPieceIds[2]
-                : ushort.MaxValue;
-            RequestMultiChargeCommandRpc(
-                first,
-                second,
-                third,
-                (byte)selectionCount,
-                Mathf.Clamp01(commandLoudness),
-                chargeAimBoardPosition.x,
-                chargeAimBoardPosition.y,
-                voicedDurationSeconds,
-                pronunciationScore);
-            ClearLocalConfirmedSelection();
+            if (UsesProximityAutoSelection)
+            {
+                RequestProximityChargeCommandRpc(
+                    Mathf.Clamp01(commandLoudness),
+                    chargeAimBoardPosition.x,
+                    chargeAimBoardPosition.y,
+                    voicedDurationSeconds,
+                    pronunciationScore);
+            }
+            else
+            {
+                ushort first = _localConfirmedPieceIds[0];
+                ushort second = selectionCount > 1
+                    ? _localConfirmedPieceIds[1]
+                    : ushort.MaxValue;
+                ushort third = selectionCount > 2
+                    ? _localConfirmedPieceIds[2]
+                    : ushort.MaxValue;
+                RequestMultiChargeCommandRpc(
+                    first,
+                    second,
+                    third,
+                    (byte)selectionCount,
+                    Mathf.Clamp01(commandLoudness),
+                    chargeAimBoardPosition.x,
+                    chargeAimBoardPosition.y,
+                    voicedDurationSeconds,
+                    pronunciationScore);
+                ClearLocalConfirmedSelection();
+            }
+
+            if (gameMode?.Commands.ShowChargeRaycastLaser ?? false)
+            {
+                ShowLocalChargeLaser(chargeAimBoardPosition);
+            }
+
             return true;
         }
 
@@ -1315,7 +1339,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
             ShowLocalChargeLaser(chargeAimBoardPosition);
         }
 
-        if (ActiveVoiceCommandVersion == VoiceCommandVersion.ConfirmedSelectionCharge)
+        if (UsesManualConfirmedSelection)
         {
             ClearLocalConfirmedSelection(pieceId);
         }
@@ -1338,7 +1362,8 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
         float pronunciationScore,
         RpcParams rpcParams = default)
     {
-        if (!NetworkPlayer.TryGetByClientId(
+        if (!UsesManualConfirmedSelection ||
+            !NetworkPlayer.TryGetByClientId(
                 rpcParams.Receive.SenderClientId,
                 out NetworkPlayer player) ||
             player.IsEliminated ||
@@ -1376,12 +1401,107 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                     _pieces[index].PieceType,
                     PieceVoiceCommand.Charge,
                     out _,
-                    voicedDurationSeconds))
+                    voicedDurationSeconds,
+                    player))
             {
                 return;
             }
 
             pieceIndices.Add(index);
+        }
+
+        ExecuteChargeCommandForPieces(
+            player,
+            pieceIndices,
+            commandLoudness,
+            chargeTargetFile,
+            chargeTargetRank,
+            voicedDurationSeconds,
+            pronunciationScore);
+    }
+
+    [Rpc(
+        SendTo.Server,
+        InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestProximityChargeCommandRpc(
+        float commandLoudness,
+        float chargeTargetFile,
+        float chargeTargetRank,
+        float voicedDurationSeconds,
+        float pronunciationScore,
+        RpcParams rpcParams = default)
+    {
+        if (!UsesProximityAutoSelection ||
+            !NetworkPlayer.TryGetByClientId(
+                rpcParams.Receive.SenderClientId,
+                out NetworkPlayer player) ||
+            player.IsEliminated ||
+            pieceSpawner == null ||
+            _isGameOver.Value)
+        {
+            return;
+        }
+
+        Vector3 avatarPose = player.AvatarBoardPose;
+        Vector2 commanderPosition = new(avatarPose.x, avatarPose.z);
+        float radius = gameMode?.Commands.ProximitySelectionRadiusInSquares ?? 1.5f;
+        float radiusSquared = radius * radius;
+        List<int> pieceIndices = new();
+
+        for (int index = 0; index < _pieces.Count; index++)
+        {
+            NetworkChessPieceState piece = _pieces[index];
+            Vector2 offset = new(
+                piece.BoardFile - commanderPosition.x,
+                piece.BoardRank - commanderPosition.y);
+
+            if (piece.OwnerTeam != player.Team ||
+                offset.sqrMagnitude > radiusSquared)
+            {
+                continue;
+            }
+
+            if (!CanIssueCommand(
+                    player.Team,
+                    piece.PieceType,
+                    PieceVoiceCommand.Charge,
+                    out _,
+                    voicedDurationSeconds,
+                    player))
+            {
+                return;
+            }
+
+            pieceIndices.Add(index);
+        }
+
+        if (pieceIndices.Count == 0)
+        {
+            return;
+        }
+
+        ExecuteChargeCommandForPieces(
+            player,
+            pieceIndices,
+            commandLoudness,
+            chargeTargetFile,
+            chargeTargetRank,
+            voicedDurationSeconds,
+            pronunciationScore);
+    }
+
+    private void ExecuteChargeCommandForPieces(
+        NetworkPlayer player,
+        IReadOnlyList<int> pieceIndices,
+        float commandLoudness,
+        float chargeTargetFile,
+        float chargeTargetRank,
+        float voicedDurationSeconds,
+        float pronunciationScore)
+    {
+        if (player == null || pieceIndices == null || pieceIndices.Count == 0)
+        {
+            return;
         }
 
         voicedDurationSeconds = Mathf.Clamp(
@@ -1395,7 +1515,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
         float acceptedCost = GetVoiceChargeCost(
             _pieces[pieceIndices[0]].PieceType,
             voicedDurationSeconds,
-            count);
+            pieceIndices.Count);
 
         if (IsCostSystemEnabled &&
             GetCommandPoints(player.Team) + 0.0001f < acceptedCost)
@@ -1413,8 +1533,9 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 pieceSpawner.GroundMinimumCoordinate,
                 pieceSpawner.GroundMaximumCoordinate));
 
-        foreach (int pieceIndex in pieceIndices)
+        for (int index = 0; index < pieceIndices.Count; index++)
         {
+            int pieceIndex = pieceIndices[index];
             NetworkChessPieceState piece = _pieces[pieceIndex];
             PieceArchetypeSettings pieceSettings = GetPieceSettings(
                 piece.PieceType);
@@ -1431,7 +1552,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 piece.OwnerTeam,
                 direction.normalized);
 
-            if (gameMode != null && gameMode.Commands.UsesVoiceDurationCost)
+            if (gameMode != null && gameMode.Commands.UsesVoiceChargeScaling)
             {
                 float chargePower = gameMode.Commands.GetVoiceChargePower(
                     voicedDurationSeconds,
@@ -1462,7 +1583,8 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
             player.Team,
             representativeSettings,
             PieceVoiceCommand.Charge,
-            acceptedCost);
+            acceptedCost,
+            player);
     }
 
     [Rpc(
@@ -1506,7 +1628,8 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                  piece.PieceType,
                  command,
                  out _,
-                 voicedDurationSeconds))
+                 voicedDurationSeconds,
+                 player))
         {
             return;
         }
@@ -1550,7 +1673,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
             piece.VoiceHeading = GetVoiceHeadingForDirection(
                 piece.OwnerTeam,
                 direction.normalized);
-            if (gameMode != null && gameMode.Commands.UsesVoiceDurationCost)
+            if (gameMode != null && gameMode.Commands.UsesVoiceChargeScaling)
             {
                 float chargePower = gameMode.Commands.GetVoiceChargePower(
                     voicedDurationSeconds,
@@ -1624,7 +1747,12 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
         }
 
         _pieces[pieceIndex] = piece;
-        AcceptCommand(player.Team, pieceSettings, command, acceptedCost);
+        AcceptCommand(
+            player.Team,
+            pieceSettings,
+            command,
+            acceptedCost,
+            player);
     }
 
     private bool TryGetLocalPlayer(out NetworkPlayer localPlayer)

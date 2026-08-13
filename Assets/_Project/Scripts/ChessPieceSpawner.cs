@@ -149,10 +149,9 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     private GameObject voiceSelectionMarker;
     private Material voiceSelectionMaterial;
     private int voiceSelectionPieceId = -1;
-    private readonly GameObject[] confirmedVoiceSelectionMarkers = new GameObject[3];
-    private readonly Material[] confirmedVoiceSelectionMaterials = new Material[3];
-    private readonly int[] confirmedVoiceSelectionPieceIds =
-        { -1, -1, -1 };
+    private readonly List<GameObject> confirmedVoiceSelectionMarkers = new();
+    private readonly List<Material> confirmedVoiceSelectionMaterials = new();
+    private readonly List<int> confirmedVoiceSelectionPieceIds = new();
     private GameObject voiceCommandMarker;
     private Material voiceCommandMaterial;
     private int voiceCommandPieceId = -1;
@@ -615,10 +614,19 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     public void SetConfirmedVoiceSelectionTargets(
         IReadOnlyList<ushort> pieceIds)
     {
-        for (int index = 0; index < confirmedVoiceSelectionPieceIds.Length; index++)
+        int requestedCount = pieceIds?.Count ?? 0;
+
+        while (confirmedVoiceSelectionPieceIds.Count < requestedCount)
+        {
+            confirmedVoiceSelectionPieceIds.Add(-1);
+            confirmedVoiceSelectionMarkers.Add(null);
+            confirmedVoiceSelectionMaterials.Add(null);
+        }
+
+        for (int index = 0; index < confirmedVoiceSelectionPieceIds.Count; index++)
         {
             confirmedVoiceSelectionPieceIds[index] =
-                pieceIds != null && index < pieceIds.Count
+                index < requestedCount
                     ? pieceIds[index]
                     : -1;
 
@@ -1175,16 +1183,20 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             voiceHoverMarkerColor,
             0.46f,
             0.025f);
-        for (int index = 0; index < confirmedVoiceSelectionPieceIds.Length; index++)
+        for (int index = 0; index < confirmedVoiceSelectionPieceIds.Count; index++)
         {
+            GameObject marker = confirmedVoiceSelectionMarkers[index];
+            Material material = confirmedVoiceSelectionMaterials[index];
             UpdateVoiceTargetMarker(
-                ref confirmedVoiceSelectionMarkers[index],
-                ref confirmedVoiceSelectionMaterials[index],
+                ref marker,
+                ref material,
                 confirmedVoiceSelectionPieceIds[index],
                 $"Confirmed Voice Selection {index + 1}",
                 confirmedVoiceMarkerColor,
                 0.5f,
                 0.035f);
+            confirmedVoiceSelectionMarkers[index] = marker;
+            confirmedVoiceSelectionMaterials[index] = material;
         }
         UpdateVoiceTargetMarker(
             ref voiceCommandMarker,
