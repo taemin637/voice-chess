@@ -7,6 +7,8 @@ public sealed partial class NetworkChessGame
     private int _localConfirmedPieceId = -1;
     private readonly List<ushort> _localConfirmedPieceIds = new();
     private readonly List<ushort> _localProximityPieceIds = new();
+    private readonly Dictionary<ushort, float>
+        _localPredictedMovementCooldownEnds = new();
     private bool _localChargeAimValid;
     private Vector2 _localChargeAimBoardPosition;
     private Vector3 _localChargeAimWorldPosition;
@@ -56,9 +58,17 @@ public sealed partial class NetworkChessGame
             return false;
         }
 
-        ClearLocalVoiceChargePreview();
-
         int existingIndex = _localConfirmedPieceIds.IndexOf(pieceId);
+
+        if (existingIndex < 0 &&
+            !CanLocallySelectPiece(
+                _pieces[pieceIndex],
+                out rejection))
+        {
+            return false;
+        }
+
+        ClearLocalVoiceChargePreview();
 
         if (existingIndex >= 0)
         {
@@ -95,7 +105,12 @@ public sealed partial class NetworkChessGame
     {
         for (int index = _localConfirmedPieceIds.Count - 1; index >= 0; index--)
         {
-            if (FindPieceIndexById(_localConfirmedPieceIds[index]) < 0)
+            int pieceIndex = FindPieceIndexById(_localConfirmedPieceIds[index]);
+
+            if (pieceIndex < 0 ||
+                !CanLocallySelectPiece(
+                    _pieces[pieceIndex],
+                    out _))
             {
                 _localConfirmedPieceIds.RemoveAt(index);
             }
@@ -128,7 +143,10 @@ public sealed partial class NetworkChessGame
         {
             NetworkChessPieceState piece = _pieces[index];
 
-            if (piece.OwnerTeam != localPlayer.Team)
+            if (piece.OwnerTeam != localPlayer.Team ||
+                !CanLocallySelectPiece(
+                    piece,
+                    out _))
             {
                 continue;
             }
@@ -191,6 +209,73 @@ public sealed partial class NetworkChessGame
         }
     }
 
+    private void ClearLocalSelectionAfterMovementCommand()
+    {
+        ClearLocalConfirmedSelection();
+        _localHoveredPieceId = -1;
+        _localVoiceTargetPieceId = -1;
+        _localVoiceGazeHistory.Clear();
+        pieceSpawner?.SetVoiceSelectionTarget(null);
+    }
+
+    private bool CanLocallySelectPiece(
+        NetworkChessPieceState piece,
+        out string rejection)
+    {
+        if (!CanIssuePieceMovementCommand(
+                piece,
+                PieceVoiceCommand.Charge,
+                out rejection))
+        {
+            _localPredictedMovementCooldownEnds.Remove(piece.Id);
+            return false;
+        }
+
+        if (!IsPieceMovementCooldownEnabled)
+        {
+            _localPredictedMovementCooldownEnds.Remove(piece.Id);
+            return true;
+        }
+
+        if (!_localPredictedMovementCooldownEnds.TryGetValue(
+                piece.Id,
+                out float predictedEndTime))
+        {
+            return true;
+        }
+
+        float remaining = predictedEndTime - Time.unscaledTime;
+
+        if (remaining <= 0.0001f)
+        {
+            _localPredictedMovementCooldownEnds.Remove(piece.Id);
+            return true;
+        }
+
+        rejection = $"이 기물은 이동 쿨타임 중입니다. {remaining:F1}초 남았습니다.";
+        return false;
+    }
+
+    private void PredictLocalMovementCooldown(ushort pieceId)
+    {
+        if (!IsPieceMovementCooldownEnabled)
+        {
+            return;
+        }
+
+        _localPredictedMovementCooldownEnds[pieceId] =
+            Time.unscaledTime + PieceMovementCooldownDuration;
+    }
+
+    private void PredictLocalMovementCooldown(
+        IReadOnlyList<ushort> pieceIds)
+    {
+        for (int index = 0; index < pieceIds.Count; index++)
+        {
+            PredictLocalMovementCooldown(pieceIds[index]);
+        }
+    }
+
     public void UpdateLocalChargeAim(Ray viewRay, PlayerTeam localTeam)
     {
         if (!UsesChargeSelectionCommand ||
@@ -205,6 +290,12 @@ public sealed partial class NetworkChessGame
         }
 
         _localChargeAimValid = true;
+    }
+
+    public bool TryGetCurrentLocalChargeAim(out Vector2 boardPosition)
+    {
+        boardPosition = _localChargeAimBoardPosition;
+        return UsesChargeSelectionCommand && _localChargeAimValid;
     }
 
     private void ClearLocalChargeAim()
@@ -236,7 +327,8 @@ public sealed partial class NetworkChessGame
 
         for (int index = 0; index < _pieces.Count; index++)
         {
-            if (!pieceSpawner.TryGetNetworkPieceWorldBounds(
+            if (_pieces[index].OwnerTeam == localTeam ||
+                !pieceSpawner.TryGetNetworkPieceWorldBounds(
                     _pieces[index].Id,
                     out Bounds bounds) ||
                 !TryUseRayBoundsHit(viewRay, bounds, ref bestDistance, out Vector3 hit))

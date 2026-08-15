@@ -851,7 +851,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
             PhraseListGrammar phraseList = PhraseListGrammar.FromRecognizer(recognizer);
 
-            foreach (string phrase in KoreanVoiceCommandParser.PhraseHints)
+            foreach (string phrase in KoreanVoiceCommandParser.ChargePhraseHints)
             {
                 phraseList.AddPhrase(phrase);
             }
@@ -914,7 +914,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
             PhraseListGrammar phraseList = PhraseListGrammar.FromRecognizer(recognizer);
 
-            foreach (string phrase in KoreanVoiceCommandParser.PhraseHints)
+            foreach (string phrase in KoreanVoiceCommandParser.ChargePhraseHints)
             {
                 phraseList.AddPhrase(phrase);
             }
@@ -976,12 +976,14 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             QuietCommandDecibels,
             LoudCommandDecibels,
             GetCurrentCommandLoudnessDecibels());
+        bool hasChargeAim = _game.TryGetCurrentLocalChargeAim(
+            out Vector2 chargeAimBoardPosition);
         _game.UpdateLocalVoiceChargePreview(
             GetVoicedSpeechDuration(),
             commandLoudness,
             _liveChargePronunciationScore,
-            _utteranceStartTargetCaptured && _utteranceStartHasChargeAim,
-            _utteranceStartChargeAimBoardPosition);
+            hasChargeAim,
+            chargeAimBoardPosition);
     }
 
     private RecognitionOutcome CreateOutcome(
@@ -1110,6 +1112,10 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         float finalChargeDistance = 0f;
         float finalPronunciationScore = outcome.TextSimilarityScore;
         CommandEconomySettings economy = _game?.GameMode?.Commands;
+        Vector2 currentChargeAimBoardPosition = default;
+        bool hasCurrentChargeAim = _game != null &&
+            _game.TryGetCurrentLocalChargeAim(
+                out currentChargeAimBoardPosition);
 
         if (economy != null)
         {
@@ -1135,8 +1141,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                     outcome.SpeechDurationSeconds,
                     commandLoudness,
                     finalPronunciationScore,
-                    outcome.HasChargeAim,
-                    outcome.ChargeAimBoardPosition);
+                    hasCurrentChargeAim,
+                    currentChargeAimBoardPosition);
                 finalChargeCost = _game.LocalVoiceChargePreviewCost;
                 finalChargePower = _game.LocalVoiceChargePreviewPower;
                 finalChargeDistance = _game.LocalVoiceChargePreviewDistance;
@@ -1149,8 +1155,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                     outcome.CommandReachInSquares,
                     commandLoudness,
                     command,
-                    outcome.HasChargeAim,
-                    outcome.ChargeAimBoardPosition,
+                    hasCurrentChargeAim,
+                    currentChargeAimBoardPosition,
                     outcome.SpeechDurationSeconds,
                     finalPronunciationScore,
                     out rejection))

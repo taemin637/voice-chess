@@ -179,6 +179,11 @@ public sealed partial class NetworkChessGame
         gameMode.Commands.CostSystemEnabled;
     public bool IsCommandCooldownEnabled => gameMode != null &&
         gameMode.Commands.CooldownSystemEnabled;
+    public bool IsPieceMovementCooldownEnabled => gameMode != null &&
+        gameMode.Commands.PieceMovementCooldownEnabled;
+    public float PieceMovementCooldownDuration => gameMode != null
+        ? gameMode.Commands.PieceMovementCooldownSeconds
+        : 0f;
     public bool HasCommandRestriction =>
         IsCostSystemEnabled || IsCommandCooldownEnabled;
     public float CommandCooldownDuration => gameMode != null
@@ -857,15 +862,7 @@ public sealed partial class NetworkChessGame
         PieceMovementMode movementMode,
         PieceVoiceCommand command)
     {
-        bool isMovementCommand = command == PieceVoiceCommand.MoveForward ||
-            command == PieceVoiceCommand.MoveBackward ||
-            command == PieceVoiceCommand.MoveLeft ||
-            command == PieceVoiceCommand.MoveRight ||
-            command == PieceVoiceCommand.MoveUpperRight ||
-            command == PieceVoiceCommand.MoveUpperLeft ||
-            command == PieceVoiceCommand.MoveLowerRight ||
-            command == PieceVoiceCommand.MoveLowerLeft ||
-            command == PieceVoiceCommand.Charge;
+        bool isMovementCommand = IsPieceMovementCommand(command);
 
         if (!isMovementCommand || movementMode == PieceMovementMode.Free)
         {
@@ -887,6 +884,74 @@ public sealed partial class NetworkChessGame
             PieceMovementMode.Stationary => false,
             _ => true
         };
+    }
+
+    private static bool IsPieceMovementCommand(PieceVoiceCommand command)
+    {
+        return command == PieceVoiceCommand.MoveForward ||
+               command == PieceVoiceCommand.MoveBackward ||
+               command == PieceVoiceCommand.MoveLeft ||
+               command == PieceVoiceCommand.MoveRight ||
+               command == PieceVoiceCommand.MoveUpperRight ||
+               command == PieceVoiceCommand.MoveUpperLeft ||
+               command == PieceVoiceCommand.MoveLowerRight ||
+               command == PieceVoiceCommand.MoveLowerLeft ||
+               command == PieceVoiceCommand.Charge;
+    }
+
+    private bool CanIssuePieceMovementCommand(
+        NetworkChessPieceState piece,
+        PieceVoiceCommand command,
+        out string rejection)
+    {
+        rejection = string.Empty;
+
+        if (!IsPieceMovementCooldownEnabled ||
+            !IsPieceMovementCommand(command))
+        {
+            return true;
+        }
+
+        float remaining = GetRemainingPieceMovementCooldown(piece);
+
+        if (remaining <= 0.0001f)
+        {
+            return true;
+        }
+
+        rejection = $"이 기물은 이동 쿨타임 중입니다. {remaining:F1}초 남았습니다.";
+        return false;
+    }
+
+    private float GetRemainingPieceMovementCooldown(
+        NetworkChessPieceState piece)
+    {
+        if (!IsPieceMovementCooldownEnabled ||
+            NetworkManager == null ||
+            !NetworkManager.IsListening)
+        {
+            return 0f;
+        }
+
+        return Mathf.Max(
+            0f,
+            (float)(piece.MovementCooldownEndServerTime -
+                NetworkManager.ServerTime.Time));
+    }
+
+    private void StartPieceMovementCooldown(
+        ref NetworkChessPieceState piece)
+    {
+        if (!IsPieceMovementCooldownEnabled ||
+            NetworkManager == null ||
+            !NetworkManager.IsListening)
+        {
+            piece.MovementCooldownEndServerTime = 0d;
+            return;
+        }
+
+        piece.MovementCooldownEndServerTime =
+            NetworkManager.ServerTime.Time + PieceMovementCooldownDuration;
     }
 
     private static bool TryGetMovementHeadingOffset(

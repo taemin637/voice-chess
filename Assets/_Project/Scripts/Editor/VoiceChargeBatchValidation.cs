@@ -8,10 +8,31 @@ public static class VoiceChargeBatchValidation
 {
     public static void Run()
     {
+        ValidateChargeRecognitionContext();
         ValidateStretchedChargeParsing();
         ValidateVoiceChargeEconomy();
         ValidateRandomCaptureResolution();
         EditorApplication.Exit(0);
+    }
+
+    private static void ValidateChargeRecognitionContext()
+    {
+        HashSet<string> expectedPhrases = new()
+        {
+            "돌진",
+            "돌진해",
+            "돌진해 줘",
+            "공격",
+            "공격해",
+            "공격해 줘"
+        };
+
+        if (KoreanVoiceCommandParser.ChargePhraseHints.Count != expectedPhrases.Count ||
+            !expectedPhrases.SetEquals(KoreanVoiceCommandParser.ChargePhraseHints))
+        {
+            throw new InvalidOperationException(
+                "Azure 돌진 전용 인식 문맥에 허용되지 않은 명령이 포함되어 있습니다.");
+        }
     }
 
     private static void ValidateStretchedChargeParsing()
@@ -21,7 +42,15 @@ public static class VoiceChargeBatchValidation
             "돌진",
             "돌지이이이인",
             "도오올지이인",
-            "돌ㄹㄹㄹ진ㄴㄴㄴ"
+            "돌ㄹㄹㄹ진ㄴㄴㄴ",
+            "공격",
+            "공격해",
+            "공격해 줘",
+            "누진",
+            "부진",
+            "진진",
+            "전진",
+            "후진"
         };
 
         foreach (string example in acceptedExamples)
@@ -35,7 +64,13 @@ public static class VoiceChargeBatchValidation
             }
         }
 
-        string[] rejectedExamples = { "안녕하세요", "도전" };
+        string[] rejectedExamples =
+        {
+            "안녕하세요",
+            "도전",
+            "멈춰",
+            "왼쪽으로 가"
+        };
 
         foreach (string example in rejectedExamples)
         {

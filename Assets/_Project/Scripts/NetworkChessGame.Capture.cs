@@ -193,6 +193,7 @@ public sealed partial class NetworkChessGame
             king.VoiceChargeDistanceRemaining = 0f;
             king.KnockbackFileVelocity = 0f;
             king.KnockbackRankVelocity = 0f;
+            king.MovementCooldownEndServerTime = 0d;
             _pieces.Add(king);
             _completedBoardKingRespawns.Add(pair.Key);
         }

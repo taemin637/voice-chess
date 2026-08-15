@@ -41,6 +41,8 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
     private bool _wasMatchStarted;
     private bool _wasGameOver;
     private bool _isFallingOffBoard;
+    private bool _isMouseChargeHeld;
+    private float _mouseChargeStartedAt;
     private PlayerTeam _matchStartPoseTeam = PlayerTeam.Unassigned;
     private GUIStyle _respawnCountdownStyle;
     private GUIStyle _respawnCountdownShadowStyle;
@@ -69,6 +71,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
 
         if (!_cameraConfigured || _game == null || !_game.IsSpawned)
         {
+            CancelMouseCharge();
             return;
         }
 
@@ -107,6 +110,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
 
         if (captureKingRespawning)
         {
+            CancelMouseCharge();
             UpdateCaptureRespawnCamera();
             _game.UpdateLocalChargeAim(default, PlayerTeam.Unassigned);
             _game.UpdateLocalVoiceGazeTarget(null, _file, _rank);
@@ -124,6 +128,7 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         UpdateMovement(gameplayInputActive);
         UpdateCameraTransform();
         UpdateGazeTarget(gameplayInputActive);
+        UpdateMouseChargeInput(gameplayInputActive);
         _wasMatchStarted = matchStarted;
         _wasGameOver = isGameOver;
     }
@@ -602,6 +607,103 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
         };
     }
 
+    private void UpdateMouseChargeInput(bool gameplayInputActive)
+    {
+        Mouse mouse = Mouse.current;
+
+        if (!gameplayInputActive ||
+            mouse == null ||
+            _game == null ||
+            !_game.UsesChargeSelectionCommand)
+        {
+            CancelMouseCharge();
+            return;
+        }
+
+        if (mouse.rightButton.wasPressedThisFrame)
+        {
+            _isMouseChargeHeld = true;
+            _mouseChargeStartedAt = Time.unscaledTime;
+        }
+
+        if (!_isMouseChargeHeld)
+        {
+            return;
+        }
+
+        float heldDuration = Mathf.Max(
+            0f,
+            Time.unscaledTime - _mouseChargeStartedAt);
+
+        if (mouse.rightButton.wasReleasedThisFrame ||
+            !mouse.rightButton.isPressed)
+        {
+            ExecuteMouseCharge(heldDuration);
+            return;
+        }
+
+        float normalizedLoudness = GetMouseChargeNormalizedLoudness(
+            heldDuration);
+        _game.UpdateLocalVoiceChargePreview(
+            heldDuration,
+            normalizedLoudness,
+            pronunciationScore: 1f);
+    }
+
+    private void ExecuteMouseCharge(float heldDuration)
+    {
+        _isMouseChargeHeld = false;
+        float normalizedLoudness = GetMouseChargeNormalizedLoudness(
+            heldDuration);
+
+        if (!_game.TryGetLocalVoiceCommandSnapshot(
+                out ushort pieceId,
+                out float targetDistanceInSquares,
+                out bool hasChargeAim,
+                out Vector2 chargeAimBoardPosition))
+        {
+            _game.ClearLocalVoiceChargePreview();
+            return;
+        }
+
+        bool accepted = _game.TryExecuteLocalVoiceCommand(
+            pieceId,
+            targetDistanceInSquares,
+            0f,
+            normalizedLoudness,
+            PieceVoiceCommand.Charge,
+            hasChargeAim,
+            chargeAimBoardPosition,
+            heldDuration,
+            1f,
+            out string rejection);
+
+        _game.ClearLocalVoiceChargePreview();
+
+        if (!accepted)
+        {
+            _game.ShowLocalVoiceFailure(pieceId);
+            Debug.LogWarning($"[Mouse Charge] {rejection}", this);
+        }
+    }
+
+    private float GetMouseChargeNormalizedLoudness(float heldDuration)
+    {
+        return _game?.GameMode?.Commands?
+            .GetMouseChargeNormalizedLoudness(heldDuration) ?? 0f;
+    }
+
+    private void CancelMouseCharge()
+    {
+        if (!_isMouseChargeHeld)
+        {
+            return;
+        }
+
+        _isMouseChargeHeld = false;
+        _game?.ClearLocalVoiceChargePreview();
+    }
+
     private void OnGUI()
     {
         if (!NetworkPlayer.MatchStarted || SessionManager.IsFrontEndVisible ||
@@ -714,6 +816,8 @@ public sealed class FirstPersonCommanderController : MonoBehaviour
 
     private void OnDisable()
     {
+        CancelMouseCharge();
+
         if (_game != null)
         {
             _game.UpdateLocalVoiceGazeTarget(null, _file, _rank);

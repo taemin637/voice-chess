@@ -60,6 +60,10 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         public float CurrentHeading;
         public float TargetHeading;
         public GameObject HeadingArrow;
+        public GameObject MovementCooldownVisual;
+        public LineRenderer MovementCooldownBackground;
+        public LineRenderer MovementCooldownArc;
+        public double MovementCooldownEndServerTime;
         public Renderer[] Renderers;
     }
 
@@ -140,6 +144,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     private Material selectionMarkerMaterial;
     private Material whiteHeadingArrowMaterial;
     private Material blackHeadingArrowMaterial;
+    private Material movementCooldownMaterial;
+    private Material movementCooldownBackgroundMaterial;
     private Mesh headingArrowMesh;
     private bool networkVisualMode;
     private GameObject voiceQuestionMark;
@@ -814,6 +820,11 @@ public sealed class ChessPieceSpawner : MonoBehaviour
                     Destroy(visual.HeadingArrow);
                 }
 
+                if (visual?.MovementCooldownVisual != null)
+                {
+                    Destroy(visual.MovementCooldownVisual);
+                }
+
                 visual = CreateNetworkPieceVisual(prefab, pieceState);
                 networkPieceVisuals[pieceState.Id] = visual;
             }
@@ -826,6 +837,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             visual.TargetPosition = GetNetworkPiecePosition(pieceState);
             visual.TargetRotation = GetNetworkPieceRotation(prefab, pieceState);
             visual.TargetHeading = pieceState.VoiceHeading;
+            visual.MovementCooldownEndServerTime =
+                pieceState.MovementCooldownEndServerTime;
         }
 
         List<ushort> removedIds = new();
@@ -845,6 +858,11 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             if (pair.Value.HeadingArrow != null)
             {
                 Destroy(pair.Value.HeadingArrow);
+            }
+
+            if (pair.Value.MovementCooldownVisual != null)
+            {
+                Destroy(pair.Value.MovementCooldownVisual);
             }
 
             removedIds.Add(pair.Key);
@@ -880,6 +898,14 @@ public sealed class ChessPieceSpawner : MonoBehaviour
                 visual.HeadingArrow = null;
             }
 
+
+            if (visual.MovementCooldownVisual != null)
+            {
+                Destroy(visual.MovementCooldownVisual);
+                visual.MovementCooldownVisual = null;
+                visual.MovementCooldownBackground = null;
+                visual.MovementCooldownArc = null;
+            }
             networkPieceVisuals.Remove(kingState.Id);
         }
 
@@ -956,8 +982,208 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         };
 
         visual.HeadingArrow = CreateHeadingArrow(visual);
+        visual.MovementCooldownVisual = CreateMovementCooldownVisual(
+            out visual.MovementCooldownBackground,
+            out visual.MovementCooldownArc);
+        visual.MovementCooldownEndServerTime =
+            pieceState.MovementCooldownEndServerTime;
         UpdateHeadingArrow(visual, position);
         return visual;
+    }
+
+    private GameObject CreateMovementCooldownVisual(
+        out LineRenderer background,
+        out LineRenderer progressArc)
+    {
+        const int segments = 48;
+        GameObject root = new("Movement Cooldown");
+        root.transform.SetParent(generatedRoot, true);
+
+        GameObject backgroundObject = new("Background");
+        backgroundObject.transform.SetParent(root.transform, false);
+        background = ConfigureCooldownLineRenderer(
+            backgroundObject,
+            GetMovementCooldownBackgroundMaterial());
+        background.loop = true;
+        background.sortingOrder = 20;
+        background.positionCount = segments;
+
+        for (int index = 0; index < segments; index++)
+        {
+            float angle = Mathf.PI * 0.5f - index * Mathf.PI * 2f / segments;
+            background.SetPosition(
+                index,
+                new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0f));
+        }
+
+        GameObject progressObject = new("Remaining Time");
+        progressObject.transform.SetParent(root.transform, false);
+        progressArc = ConfigureCooldownLineRenderer(
+            progressObject,
+            GetMovementCooldownMaterial());
+        progressArc.loop = false;
+        progressArc.sortingOrder = 21;
+        root.SetActive(false);
+        return root;
+    }
+
+    private static LineRenderer ConfigureCooldownLineRenderer(
+        GameObject lineObject,
+        Material material)
+    {
+        LineRenderer line = lineObject.AddComponent<LineRenderer>();
+        line.useWorldSpace = false;
+        line.alignment = LineAlignment.TransformZ;
+        line.numCornerVertices = 4;
+        line.numCapVertices = 4;
+        line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        line.receiveShadows = false;
+        line.sharedMaterial = material;
+        return line;
+    }
+
+    public void UpdateMovementCooldownVisuals(
+        double serverTime,
+        bool systemEnabled,
+        float cooldownDuration)
+    {
+        const int segments = 48;
+        float safeDuration = Mathf.Max(0.01f, cooldownDuration);
+        float squareSize = Mathf.Min(fileSpacing, rankSpacing);
+        float radius = squareSize * 0.3f;
+        float lineWidth = squareSize * 0.045f;
+        Camera viewCamera = Camera.main;
+
+        foreach (NetworkPieceVisual visual in networkPieceVisuals.Values)
+        {
+            if (visual.Instance == null ||
+                visual.MovementCooldownVisual == null ||
+                visual.MovementCooldownBackground == null ||
+                visual.MovementCooldownArc == null)
+            {
+                continue;
+            }
+
+            float remaining = systemEnabled
+                ? Mathf.Max(
+                    0f,
+                    (float)(visual.MovementCooldownEndServerTime - serverTime))
+                : 0f;
+
+            if (remaining <= 0.0001f)
+            {
+                visual.MovementCooldownVisual.SetActive(false);
+                continue;
+            }
+
+            Transform root = visual.MovementCooldownVisual.transform;
+            Vector3 centre = GetMovementCooldownWorldPosition(
+                visual,
+                visual.Instance.transform.position,
+                squareSize);
+            Vector3 cameraDirection = viewCamera != null
+                ? viewCamera.transform.position - centre
+                : BoardForward;
+
+            if (cameraDirection.sqrMagnitude < 0.0001f)
+            {
+                cameraDirection = BoardForward;
+            }
+
+            root.SetPositionAndRotation(
+                centre,
+                Quaternion.LookRotation(cameraDirection.normalized, BoardUp));
+            root.localScale = Vector3.one;
+
+            LineRenderer background = visual.MovementCooldownBackground;
+
+            background.startWidth = lineWidth;
+            background.endWidth = lineWidth;
+
+            for (int index = 0; index < background.positionCount; index++)
+            {
+                background.SetPosition(
+                    index,
+                    background.GetPosition(index).normalized * radius);
+            }
+
+            float progress = Mathf.Clamp01(remaining / safeDuration);
+            int pointCount = Mathf.Max(2, Mathf.CeilToInt(progress * segments) + 1);
+            visual.MovementCooldownArc.positionCount = pointCount;
+            visual.MovementCooldownArc.startWidth = lineWidth;
+            visual.MovementCooldownArc.endWidth = lineWidth;
+
+            for (int index = 0; index < pointCount; index++)
+            {
+                float normalized = Mathf.Min(
+                    progress,
+                    index / (float)segments);
+                float angle = Mathf.PI * 0.5f - normalized * Mathf.PI * 2f;
+                visual.MovementCooldownArc.SetPosition(
+                    index,
+                    new Vector3(
+                        Mathf.Cos(angle) * radius,
+                        Mathf.Sin(angle) * radius,
+                        squareSize * 0.002f));
+            }
+
+            visual.MovementCooldownVisual.SetActive(true);
+        }
+    }
+
+    private Vector3 GetMovementCooldownWorldPosition(
+        NetworkPieceVisual visual,
+        Vector3 piecePosition,
+        float squareSize)
+    {
+        if (!TryGetVisualBounds(visual, out Bounds bounds))
+        {
+            return piecePosition + BoardUp * squareSize;
+        }
+
+        Vector3 up = BoardUp.normalized;
+        float topProjection = Vector3.Dot(bounds.center, up) +
+            Mathf.Abs(up.x) * bounds.extents.x +
+            Mathf.Abs(up.y) * bounds.extents.y +
+            Mathf.Abs(up.z) * bounds.extents.z;
+        float pieceProjection = Vector3.Dot(piecePosition, up);
+        return piecePosition + up *
+            (topProjection - pieceProjection + squareSize * 0.14f);
+    }
+
+    private Material GetMovementCooldownMaterial()
+    {
+        if (movementCooldownMaterial == null)
+        {
+            movementCooldownMaterial = CreateCooldownMaterial(
+                "Movement Cooldown Material",
+                new Color(1f, 0.48f, 0.04f, 0.98f));
+        }
+
+        return movementCooldownMaterial;
+    }
+
+    private Material GetMovementCooldownBackgroundMaterial()
+    {
+        if (movementCooldownBackgroundMaterial == null)
+        {
+            movementCooldownBackgroundMaterial = CreateCooldownMaterial(
+                "Movement Cooldown Background Material",
+                new Color(0.03f, 0.03f, 0.03f, 0.58f));
+        }
+
+        return movementCooldownBackgroundMaterial;
+    }
+
+    private static Material CreateCooldownMaterial(string materialName, Color color)
+    {
+        Shader shader = Shader.Find("Sprites/Default") ??
+                        Shader.Find("Universal Render Pipeline/Unlit") ??
+                        Shader.Find("Unlit/Color");
+
+        return shader != null
+            ? new Material(shader) { name = materialName, color = color }
+            : null;
     }
 
     private GameObject CreateHeadingArrow(NetworkPieceVisual visual)
@@ -1396,6 +1622,16 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         if (blackHeadingArrowMaterial != null)
         {
             Destroy(blackHeadingArrowMaterial);
+        }
+
+        if (movementCooldownMaterial != null)
+        {
+            Destroy(movementCooldownMaterial);
+        }
+
+        if (movementCooldownBackgroundMaterial != null)
+        {
+            Destroy(movementCooldownBackgroundMaterial);
         }
 
         if (headingArrowMesh != null)

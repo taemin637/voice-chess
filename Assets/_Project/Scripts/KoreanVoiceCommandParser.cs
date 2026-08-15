@@ -83,57 +83,9 @@ public static class KoreanVoiceCommandParser
         new("돌진", PieceVoiceCommand.Charge),
         new("돌진해", PieceVoiceCommand.Charge),
         new("돌진해 줘", PieceVoiceCommand.Charge),
-
-        new("앞으로 가", PieceVoiceCommand.MoveForward),
-        new("앞으로 이동", PieceVoiceCommand.MoveForward),
-        new("앞쪽으로 가", PieceVoiceCommand.MoveForward),
-        new("앞쪽으로 이동", PieceVoiceCommand.MoveForward),
-        new("앞으로 쭉 가", PieceVoiceCommand.MoveForward),
-        new("계속 앞으로 가", PieceVoiceCommand.MoveForward),
-        new("계속 가", PieceVoiceCommand.MoveForward),
-        new("전진", PieceVoiceCommand.MoveForward),
-        new("직진", PieceVoiceCommand.MoveForward),
-        new("앞으로 나아가", PieceVoiceCommand.MoveForward),
-
-        new("뒤로 가", PieceVoiceCommand.MoveBackward),
-        new("뒤로 이동", PieceVoiceCommand.MoveBackward),
-        new("뒤쪽으로 가", PieceVoiceCommand.MoveBackward),
-        new("계속 뒤로 가", PieceVoiceCommand.MoveBackward),
-        new("후진", PieceVoiceCommand.MoveBackward),
-
-        new("멈춰", PieceVoiceCommand.Stop),
-        new("그만", PieceVoiceCommand.Stop),
-        new("정지", PieceVoiceCommand.Stop),
-        new("스톱", PieceVoiceCommand.Stop),
-        new("이동 중지", PieceVoiceCommand.Stop),
-        new("여기서 멈춰", PieceVoiceCommand.Stop),
-
-        new("오른쪽 위로 가", PieceVoiceCommand.MoveUpperRight),
-        new("왼쪽 위로 가", PieceVoiceCommand.MoveUpperLeft),
-        new("오른쪽 아래로 가", PieceVoiceCommand.MoveLowerRight),
-        new("왼쪽 아래로 가", PieceVoiceCommand.MoveLowerLeft),
-
-        new("왼쪽으로 가", PieceVoiceCommand.MoveLeft),
-        new("왼쪽으로 돌아", PieceVoiceCommand.TurnLeft),
-        new("왼쪽으로 회전", PieceVoiceCommand.TurnLeft),
-        new("왼쪽으로 틀어", PieceVoiceCommand.TurnLeft),
-        new("좌회전", PieceVoiceCommand.TurnLeft),
-        new("좌측으로 돌아", PieceVoiceCommand.TurnLeft),
-
-        new("오른쪽으로 가", PieceVoiceCommand.MoveRight),
-        new("오른쪽으로 돌아", PieceVoiceCommand.TurnRight),
-        new("오른쪽으로 회전", PieceVoiceCommand.TurnRight),
-        new("오른쪽으로 틀어", PieceVoiceCommand.TurnRight),
-        new("우회전", PieceVoiceCommand.TurnRight),
-        new("우측으로 돌아", PieceVoiceCommand.TurnRight),
-        new("옆으로 돌아", PieceVoiceCommand.TurnRight),
-
-        new("주 스킬 사용", PieceVoiceCommand.SkillPrimary),
-        new("첫 번째 스킬", PieceVoiceCommand.SkillPrimary),
-        new("1번 스킬", PieceVoiceCommand.SkillPrimary),
-        new("보조 스킬 사용", PieceVoiceCommand.SkillSecondary),
-        new("두 번째 스킬", PieceVoiceCommand.SkillSecondary),
-        new("2번 스킬", PieceVoiceCommand.SkillSecondary)
+        new("공격", PieceVoiceCommand.Charge),
+        new("공격해", PieceVoiceCommand.Charge),
+        new("공격해 줘", PieceVoiceCommand.Charge)
     };
 
     private static readonly string[] SequenceConnectors =
@@ -150,7 +102,7 @@ public static class KoreanVoiceCommandParser
         .OrderByDescending(definition => definition.Comparable.Length)
         .ToArray();
 
-    public static IReadOnlyList<string> PhraseHints { get; } = Definitions
+    public static IReadOnlyList<string> ChargePhraseHints { get; } = Definitions
         .Select(definition => definition.Phrase)
         .Distinct()
         .ToArray();
@@ -223,6 +175,16 @@ public static class KoreanVoiceCommandParser
             }
         }
 
+        if (normalized.Length == 2 && normalized[1] == '진')
+        {
+            return Accepted(
+                PieceVoiceCommand.Charge,
+                normalized,
+                "돌진",
+                0.95f,
+                "두 글자이며 마지막 글자가 ‘진’인 인식 결과");
+        }
+
         float stretchedChargeScore = GetChargePronunciationScore(comparable);
 
         if (stretchedChargeScore >= StretchedChargeAcceptanceScore &&
@@ -246,11 +208,6 @@ public static class KoreanVoiceCommandParser
 
         foreach (PhraseDefinition definition in Definitions)
         {
-            if (HasConflictingDirection(comparable, definition.Command))
-            {
-                continue;
-            }
-
             float score = GetSimilarity(comparable, definition.Comparable);
 
             if (score > bestScore)
@@ -530,17 +487,6 @@ public static class KoreanVoiceCommandParser
         string normalized,
         out KoreanVoiceParseResult result)
     {
-        if (ContainsAny(text, "멈", "정지", "스톱", "그만", "중지"))
-        {
-            result = Accepted(
-                PieceVoiceCommand.Stop,
-                normalized,
-                "멈춤 계열 표현",
-                0.97f,
-                "멈춤 핵심어 감지");
-            return true;
-        }
-
         if (ContainsAny(text, "돌진"))
         {
             result = Accepted(
@@ -552,166 +498,19 @@ public static class KoreanVoiceCommandParser
             return true;
         }
 
-        bool moveAction = ContainsAny(text, "가", "이동", "나아", "진행", "전진", "직진", "후진");
-        bool backwardDirection = ContainsAny(text, "뒤", "후진");
-        bool leftDirection = ContainsAny(text, "왼쪽", "왼", "좌측", "좌회전");
-        bool rightDirection = ContainsAny(text, "오른쪽", "오른", "우측", "우회전");
-        bool upperDirection = ContainsAny(text, "위", "위쪽");
-        bool lowerDirection = ContainsAny(text, "아래", "밑");
-
-        if (backwardDirection && moveAction)
+        if (ContainsAny(text, "공격"))
         {
             result = Accepted(
-                PieceVoiceCommand.MoveBackward,
+                PieceVoiceCommand.Charge,
                 normalized,
-                "뒤로 이동",
-                0.94f,
-                "뒤 방향 + 이동 핵심어 감지");
-            return true;
-        }
-
-        bool turnAction = ContainsAny(text, "돌", "회전", "틀", "꺾", "방향전환");
-
-        if (rightDirection && upperDirection && moveAction && !turnAction)
-        {
-            result = Accepted(
-                PieceVoiceCommand.MoveUpperRight,
-                normalized,
-                "오른쪽 위로 이동",
-                0.97f,
-                "오른쪽 + 위 방향 + 이동 핵심어 감지");
-            return true;
-        }
-
-        if (leftDirection && upperDirection && moveAction && !turnAction)
-        {
-            result = Accepted(
-                PieceVoiceCommand.MoveUpperLeft,
-                normalized,
-                "왼쪽 위로 이동",
-                0.97f,
-                "왼쪽 + 위 방향 + 이동 핵심어 감지");
-            return true;
-        }
-
-        if (rightDirection && lowerDirection && moveAction && !turnAction)
-        {
-            result = Accepted(
-                PieceVoiceCommand.MoveLowerRight,
-                normalized,
-                "오른쪽 아래로 이동",
-                0.97f,
-                "오른쪽 + 아래 방향 + 이동 핵심어 감지");
-            return true;
-        }
-
-        if (leftDirection && lowerDirection && moveAction && !turnAction)
-        {
-            result = Accepted(
-                PieceVoiceCommand.MoveLowerLeft,
-                normalized,
-                "왼쪽 아래로 이동",
-                0.97f,
-                "왼쪽 + 아래 방향 + 이동 핵심어 감지");
-            return true;
-        }
-
-        if (leftDirection && moveAction && !turnAction)
-        {
-            result = Accepted(
-                PieceVoiceCommand.MoveLeft,
-                normalized,
-                "왼쪽으로 이동",
-                0.95f,
-                "왼쪽 방향 + 이동 핵심어 감지");
-            return true;
-        }
-
-        if (rightDirection && moveAction && !turnAction)
-        {
-            result = Accepted(
-                PieceVoiceCommand.MoveRight,
-                normalized,
-                "오른쪽으로 이동",
-                0.95f,
-                "오른쪽 방향 + 이동 핵심어 감지");
-            return true;
-        }
-
-        if (turnAction && leftDirection)
-        {
-            result = Accepted(
-                PieceVoiceCommand.TurnLeft,
-                normalized,
-                "왼쪽 회전",
-                0.95f,
-                "왼쪽 방향 + 회전 핵심어 감지");
-            return true;
-        }
-
-        if (turnAction && rightDirection)
-        {
-            result = Accepted(
-                PieceVoiceCommand.TurnRight,
-                normalized,
-                "오른쪽 회전",
-                0.95f,
-                "오른쪽 방향 + 회전 핵심어 감지");
-            return true;
-        }
-
-        if (turnAction && text.Contains("옆", StringComparison.Ordinal))
-        {
-            result = Accepted(
-                PieceVoiceCommand.TurnRight,
-                normalized,
-                "옆으로 돌아",
-                0.86f,
-                "방향이 없는 ‘옆’은 오른쪽 회전으로 약속");
-            return true;
-        }
-
-        bool forwardDirection = ContainsAny(text, "앞", "전진", "직진");
-
-        if (forwardDirection && moveAction)
-        {
-            result = Accepted(
-                PieceVoiceCommand.MoveForward,
-                normalized,
-                "앞으로 이동",
-                0.94f,
-                "앞 방향 + 이동 핵심어 감지");
+                "공격",
+                0.99f,
+                "공격 핵심어 감지");
             return true;
         }
 
         result = default;
         return false;
-    }
-
-    private static bool HasConflictingDirection(
-        string text,
-        PieceVoiceCommand command)
-    {
-        bool mentionsLeft = ContainsAny(text, "왼쪽", "왼", "좌측", "좌회전");
-        bool mentionsRight = ContainsAny(text, "오른쪽", "오른", "우측", "우회전");
-        bool mentionsBackward = ContainsAny(text, "뒤", "후진");
-        bool mentionsUpper = ContainsAny(text, "위", "위쪽");
-        bool mentionsLower = ContainsAny(text, "아래", "밑");
-
-        return command switch
-        {
-            PieceVoiceCommand.MoveForward => mentionsLeft || mentionsRight || mentionsBackward,
-            PieceVoiceCommand.MoveBackward => mentionsLeft || mentionsRight,
-            PieceVoiceCommand.TurnLeft => mentionsRight || mentionsBackward,
-            PieceVoiceCommand.TurnRight => mentionsLeft || mentionsBackward,
-            PieceVoiceCommand.MoveLeft => mentionsRight || mentionsBackward || mentionsUpper || mentionsLower,
-            PieceVoiceCommand.MoveRight => mentionsLeft || mentionsBackward || mentionsUpper || mentionsLower,
-            PieceVoiceCommand.MoveUpperRight => mentionsLeft || mentionsBackward || mentionsLower,
-            PieceVoiceCommand.MoveUpperLeft => mentionsRight || mentionsBackward || mentionsLower,
-            PieceVoiceCommand.MoveLowerRight => mentionsLeft || mentionsUpper,
-            PieceVoiceCommand.MoveLowerLeft => mentionsRight || mentionsUpper,
-            _ => mentionsLeft || mentionsRight || mentionsBackward
-        };
     }
 
     private static float GetSimilarity(string left, string right)

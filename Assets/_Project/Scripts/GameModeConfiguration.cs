@@ -169,6 +169,12 @@ public sealed class CommandEconomySettings
     [Tooltip("중앙 조준점에 표시되는 원형 쿨타임 게이지의 지름입니다. 화면 픽셀 단위입니다.")]
     [SerializeField, Min(16f)]
     private float commandCooldownReticleDiameterPixels = 72f;
+
+    [Header("기물별 이동 쿨타임")]
+    [Tooltip("켜면 이동 또는 돌진 명령을 받은 기물은 개별 쿨타임 동안 다시 이동 명령을 받을 수 없습니다.")]
+    [SerializeField] private bool pieceMovementCooldownEnabled = true;
+    [Tooltip("기물이 이동 또는 돌진 명령을 받은 뒤 다시 이동 명령을 받을 수 있을 때까지의 시간입니다.")]
+    [SerializeField, Min(0.01f)] private float pieceMovementCooldownSeconds = 10f;
     [FormerlySerializedAs("startingPoints")]
     [SerializeField, Min(0f)] private float startingCost = 3f;
     [FormerlySerializedAs("maximumPoints")]
@@ -194,6 +200,9 @@ public sealed class CommandEconomySettings
     [Header("신규 돌진 - 거리 판정")]
     [SerializeField, Min(0f)] private float voiceChargeMinimumDistanceInSquares = 0.75f;
     [SerializeField, Min(0.01f)] private float voiceChargeMaximumDistanceInSquares = 8f;
+    [InspectorName("마우스 돌진 최소 거리")]
+    [Tooltip("우클릭 돌진을 누르기 시작했을 때의 거리입니다. 음성 돌진 최소 거리와 최대 음량의 초기 추가 거리 사이에서 조절됩니다.")]
+    [SerializeField, Min(0f)] private float mouseChargeMinimumDistanceInSquares = 1f;
     [Tooltip("최대 음량으로 말하기 시작했을 때 최소 거리에 즉시 더해지는 거리입니다. 이후 발화 시간에 따라 최대 거리까지 계속 증가합니다.")]
     [SerializeField, Min(0f)] private float voiceChargeMaximumInitialLoudnessDistanceInSquares = 1f;
     [Tooltip("돌진이 시간에 따라 충전되는 기본 비중입니다. 이 값이 클수록 작은 목소리도 발화 길이만큼 안정적으로 충전됩니다.")]
@@ -274,6 +283,9 @@ public sealed class CommandEconomySettings
     public float CommandCooldownSeconds => Mathf.Max(0.01f, commandCooldownSeconds);
     public float CommandCooldownReticleDiameterPixels =>
         Mathf.Max(16f, commandCooldownReticleDiameterPixels);
+    public bool PieceMovementCooldownEnabled => pieceMovementCooldownEnabled;
+    public float PieceMovementCooldownSeconds =>
+        Mathf.Max(0.01f, pieceMovementCooldownSeconds);
     public PlayerTeam FirstTeam =>
         firstTeam == PlayerTeam.Black ? PlayerTeam.Black : PlayerTeam.White;
     public bool AdvanceAfterAcceptedCommand => advanceAfterAcceptedCommand;
@@ -299,6 +311,13 @@ public sealed class CommandEconomySettings
             0f,
             VoiceChargeMaximumDistanceInSquares -
             VoiceChargeMinimumDistanceInSquares);
+    public float MouseChargeMinimumDistanceInSquares => Mathf.Clamp(
+        mouseChargeMinimumDistanceInSquares,
+        VoiceChargeMinimumDistanceInSquares,
+        Mathf.Min(
+            VoiceChargeMaximumDistanceInSquares,
+            VoiceChargeMinimumDistanceInSquares +
+            VoiceChargeMaximumInitialLoudnessDistanceInSquares));
     public float VoiceChargeLoudnessExponent =>
         Mathf.Max(0.01f, voiceChargeLoudnessExponent);
     public float VoiceChargeDurationExponent =>
@@ -425,6 +444,29 @@ public sealed class CommandEconomySettings
             Mathf.Clamp01(chargePower));
     }
 
+    public float GetMouseChargeNormalizedLoudness(float heldDurationSeconds)
+    {
+        float initialDistanceRange =
+            VoiceChargeMaximumInitialLoudnessDistanceInSquares;
+        float startingLoudness = 0f;
+
+        if (initialDistanceRange > 0.0001f)
+        {
+            float startingLoudnessPower = Mathf.InverseLerp(
+                VoiceChargeMinimumDistanceInSquares,
+                VoiceChargeMinimumDistanceInSquares + initialDistanceRange,
+                MouseChargeMinimumDistanceInSquares);
+            startingLoudness = Mathf.Pow(
+                startingLoudnessPower,
+                1f / VoiceChargeLoudnessExponent);
+        }
+
+        float holdProgress = Mathf.Clamp01(
+            Mathf.Max(0f, heldDurationSeconds) /
+            VoiceChargeMaximumDurationSeconds);
+        return Mathf.Lerp(startingLoudness, 1f, holdProgress);
+    }
+
     public void Validate()
     {
         if (firstTeam != PlayerTeam.White && firstTeam != PlayerTeam.Black)
@@ -452,6 +494,9 @@ public sealed class CommandEconomySettings
         commandCooldownReticleDiameterPixels = Mathf.Max(
             16f,
             commandCooldownReticleDiameterPixels);
+        pieceMovementCooldownSeconds = Mathf.Max(
+            0.01f,
+            pieceMovementCooldownSeconds);
         maximumCost = Mathf.Max(0.01f, maximumCost);
         startingCost = Mathf.Clamp(startingCost, 0f, maximumCost);
         rechargeIntervalSeconds = Mathf.Max(0.01f, rechargeIntervalSeconds);
@@ -474,6 +519,13 @@ public sealed class CommandEconomySettings
             0f,
             voiceChargeMaximumDistanceInSquares -
             voiceChargeMinimumDistanceInSquares);
+        mouseChargeMinimumDistanceInSquares = Mathf.Clamp(
+            mouseChargeMinimumDistanceInSquares,
+            voiceChargeMinimumDistanceInSquares,
+            Mathf.Min(
+                voiceChargeMaximumDistanceInSquares,
+                voiceChargeMinimumDistanceInSquares +
+                voiceChargeMaximumInitialLoudnessDistanceInSquares));
         voiceChargeDurationWeight = Mathf.Max(0f, voiceChargeDurationWeight);
         voiceChargeDurationExponent = Mathf.Max(
             0.05f,

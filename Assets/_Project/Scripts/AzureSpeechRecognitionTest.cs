@@ -345,7 +345,7 @@ public sealed class AzureSpeechRecognitionTest : MonoBehaviour
 
         PhraseListGrammar grammar = PhraseListGrammar.FromRecognizer(_recognizer);
 
-        foreach (string phrase in KoreanVoiceCommandParser.PhraseHints)
+        foreach (string phrase in KoreanVoiceCommandParser.ChargePhraseHints)
         {
             grammar.AddPhrase(phrase);
         }
