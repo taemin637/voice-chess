@@ -82,6 +82,9 @@ MonoBehaviour:
   collisions:
     restitution: 1
     impulseMultiplier: 1.5
+    directImpactMultiplier: 1
+    chainTransferMultiplier: 0.95
+    maximumTransferredSpeedRatio: 1.25
     separationEpsilon: 0.0001
     playerCollisionHeight: 0.6
     minimumPlayerImpactSpeed: 0.08

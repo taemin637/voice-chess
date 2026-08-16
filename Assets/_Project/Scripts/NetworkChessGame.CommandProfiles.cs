@@ -16,8 +16,8 @@ public sealed partial class NetworkChessGame
     private LineRenderer _localChargeLaser;
     private Material _localChargeLaserMaterial;
     private float _localChargeLaserExpiresAt;
-    private GameObject _localVoiceChargeArrowObject;
-    private LineRenderer _localVoiceChargeArrow;
+    private readonly List<GameObject> _localVoiceChargeArrowObjects = new();
+    private readonly List<LineRenderer> _localVoiceChargeArrows = new();
     private Material _localVoiceChargeArrowMaterial;
     private float _localVoiceChargePreviewCost;
     private float _localVoiceChargePreviewPower;
@@ -325,21 +325,6 @@ public sealed partial class NetworkChessGame
         float bestDistance = maximumDistance;
         bool found = false;
 
-        for (int index = 0; index < _pieces.Count; index++)
-        {
-            if (_pieces[index].OwnerTeam == localTeam ||
-                !pieceSpawner.TryGetNetworkPieceWorldBounds(
-                    _pieces[index].Id,
-                    out Bounds bounds) ||
-                !TryUseRayBoundsHit(viewRay, bounds, ref bestDistance, out Vector3 hit))
-            {
-                continue;
-            }
-
-            worldPosition = hit;
-            found = true;
-        }
-
         foreach (NetworkPlayer player in NetworkPlayer.Players)
         {
             if (player == null ||
@@ -548,67 +533,61 @@ public sealed partial class NetworkChessGame
 
         if (voicedDurationSeconds <= 0f ||
             !previewAimValid ||
-            pieceSpawner == null ||
-            _localVoiceChargePreviewDistance <= 0f)
+            pieceSpawner == null)
         {
-            HideLocalVoiceChargeArrow();
+            HideLocalVoiceChargeArrows();
             return;
         }
 
-        Vector2 piecePosition = new(piece.BoardFile, piece.BoardRank);
-        Vector2 boardDirection = previewAimBoardPosition - piecePosition;
-
-        if (boardDirection.sqrMagnitude < 0.0001f)
-        {
-            HideLocalVoiceChargeArrow();
-            return;
-        }
-
-        boardDirection.Normalize();
-        Vector2 arrowEndBoard = piecePosition +
-            boardDirection * _localVoiceChargePreviewDistance;
-        float squareSize = Mathf.Min(pieceSpawner.FileSpacing, pieceSpawner.RankSpacing);
+        float squareSize = Mathf.Min(
+            pieceSpawner.FileSpacing,
+            pieceSpawner.RankSpacing);
         float height = settings.VoiceChargeArrowHeightInSquares * squareSize;
-        Vector3 start = pieceSpawner.GetBoardWorldPosition(
-            piecePosition.x,
-            piecePosition.y) + pieceSpawner.BoardUp * height;
-        Vector3 end = pieceSpawner.GetBoardWorldPosition(
-            arrowEndBoard.x,
-            arrowEndBoard.y) + pieceSpawner.BoardUp * height;
-        EnsureLocalVoiceChargeArrow();
-
-        if (_localVoiceChargeArrow == null)
-        {
-            return;
-        }
-
-        Vector3 forward = end - start;
-        float worldLength = forward.magnitude;
-        forward = worldLength > 0.0001f ? forward / worldLength : pieceSpawner.BoardForward;
-        Vector3 side = Vector3.Cross(pieceSpawner.BoardUp, forward).normalized;
-        float headLength = Mathf.Min(
-            worldLength * settings.VoiceChargeArrowHeadLengthRatio,
-            squareSize * 0.9f);
-        float headWidth = headLength * 0.55f;
-        Vector3 headBase = end - forward * headLength;
         Color color = settings.VoiceChargeArrowColor;
         float width = settings.VoiceChargeArrowWidthInSquares * squareSize;
-        _localVoiceChargeArrow.startWidth = width;
-        _localVoiceChargeArrow.endWidth = width;
-        _localVoiceChargeArrow.startColor = color;
-        _localVoiceChargeArrow.endColor = color;
+
+        int visibleArrowCount = 0;
+
+        for (int selectionIndex = 0;
+             selectionIndex < _localConfirmedPieceIds.Count;
+             selectionIndex++)
+        {
+            int selectedPieceIndex = FindPieceIndexById(
+                _localConfirmedPieceIds[selectionIndex]);
+
+            if (selectedPieceIndex < 0)
+            {
+                continue;
+            }
+
+            NetworkChessPieceState selectedPiece = _pieces[selectedPieceIndex];
+            float chargeDistance = GetVoiceChargeDistance(
+                selectedPiece,
+                _localVoiceChargePreviewPower);
+
+            if (!TryShowLocalVoiceChargeArrow(
+                    visibleArrowCount,
+                    selectedPiece,
+                    previewAimBoardPosition,
+                    chargeDistance,
+                    height,
+                    squareSize,
+                    width,
+                    color,
+                    settings.VoiceChargeArrowHeadLengthRatio))
+            {
+                continue;
+            }
+
+            visibleArrowCount++;
+        }
+
+        HideLocalVoiceChargeArrowsFrom(visibleArrowCount);
 
         if (_localVoiceChargeArrowMaterial != null)
         {
             _localVoiceChargeArrowMaterial.color = color;
         }
-
-        _localVoiceChargeArrow.SetPosition(0, start);
-        _localVoiceChargeArrow.SetPosition(1, end);
-        _localVoiceChargeArrow.SetPosition(2, headBase + side * headWidth);
-        _localVoiceChargeArrow.SetPosition(3, end);
-        _localVoiceChargeArrow.SetPosition(4, headBase - side * headWidth);
-        _localVoiceChargeArrowObject.SetActive(true);
     }
 
     public void ClearLocalVoiceChargePreview()
@@ -616,37 +595,127 @@ public sealed partial class NetworkChessGame
         _localVoiceChargePreviewCost = 0f;
         _localVoiceChargePreviewPower = 0f;
         _localVoiceChargePreviewDistance = 0f;
-        HideLocalVoiceChargeArrow();
+        HideLocalVoiceChargeArrows();
     }
 
-    private void EnsureLocalVoiceChargeArrow()
+    private bool TryShowLocalVoiceChargeArrow(
+        int arrowIndex,
+        NetworkChessPieceState piece,
+        Vector2 aimBoardPosition,
+        float chargeDistance,
+        float height,
+        float squareSize,
+        float width,
+        Color color,
+        float headLengthRatio)
     {
-        if (_localVoiceChargeArrowObject != null)
+        if (chargeDistance <= 0f)
         {
-            return;
+            return false;
         }
 
-        _localVoiceChargeArrowObject = new GameObject("Local Voice Charge Arrow");
-        _localVoiceChargeArrow = _localVoiceChargeArrowObject.AddComponent<LineRenderer>();
-        _localVoiceChargeArrow.useWorldSpace = true;
-        _localVoiceChargeArrow.positionCount = 5;
-        _localVoiceChargeArrow.shadowCastingMode =
-            UnityEngine.Rendering.ShadowCastingMode.Off;
-        _localVoiceChargeArrow.receiveShadows = false;
-        Shader shader = Shader.Find("Sprites/Default");
+        Vector2 piecePosition = new(piece.BoardFile, piece.BoardRank);
+        Vector2 boardDirection = aimBoardPosition - piecePosition;
 
-        if (shader != null)
+        if (boardDirection.sqrMagnitude < 0.0001f)
         {
-            _localVoiceChargeArrowMaterial = new Material(shader);
-            _localVoiceChargeArrow.sharedMaterial = _localVoiceChargeArrowMaterial;
+            return false;
         }
+
+        boardDirection.Normalize();
+        Vector2 arrowEndBoard = piecePosition + boardDirection * chargeDistance;
+        Vector3 start = pieceSpawner.GetBoardWorldPosition(
+            piecePosition.x,
+            piecePosition.y) + pieceSpawner.BoardUp * height;
+        Vector3 end = pieceSpawner.GetBoardWorldPosition(
+            arrowEndBoard.x,
+            arrowEndBoard.y) + pieceSpawner.BoardUp * height;
+        LineRenderer arrow = EnsureLocalVoiceChargeArrow(arrowIndex);
+
+        if (arrow == null)
+        {
+            return false;
+        }
+
+        Vector3 forward = end - start;
+        float worldLength = forward.magnitude;
+        forward = worldLength > 0.0001f
+            ? forward / worldLength
+            : pieceSpawner.BoardForward;
+        Vector3 side = Vector3.Cross(pieceSpawner.BoardUp, forward).normalized;
+        float headLength = Mathf.Min(
+            worldLength * headLengthRatio,
+            squareSize * 0.9f);
+        float headWidth = headLength * 0.55f;
+        Vector3 headBase = end - forward * headLength;
+        Vector3 middle = Vector3.Lerp(start, end, 0.5f);
+        Vector3 middleHeadBase = middle - forward * headLength;
+
+        arrow.startWidth = width;
+        arrow.endWidth = width;
+        arrow.startColor = color;
+        arrow.endColor = color;
+        arrow.SetPosition(0, start);
+        arrow.SetPosition(1, middle);
+        arrow.SetPosition(2, middleHeadBase + side * headWidth);
+        arrow.SetPosition(3, middle);
+        arrow.SetPosition(4, middleHeadBase - side * headWidth);
+        arrow.SetPosition(5, middle);
+        arrow.SetPosition(6, end);
+        arrow.SetPosition(7, headBase + side * headWidth);
+        arrow.SetPosition(8, end);
+        arrow.SetPosition(9, headBase - side * headWidth);
+        _localVoiceChargeArrowObjects[arrowIndex].SetActive(true);
+        return true;
     }
 
-    private void HideLocalVoiceChargeArrow()
+    private LineRenderer EnsureLocalVoiceChargeArrow(int arrowIndex)
     {
-        if (_localVoiceChargeArrowObject != null)
+        if (_localVoiceChargeArrowMaterial == null)
         {
-            _localVoiceChargeArrowObject.SetActive(false);
+            Shader shader = Shader.Find("Sprites/Default");
+
+            if (shader != null)
+            {
+                _localVoiceChargeArrowMaterial = new Material(shader);
+            }
+        }
+
+        while (_localVoiceChargeArrows.Count <= arrowIndex)
+        {
+            int number = _localVoiceChargeArrows.Count + 1;
+            GameObject arrowObject = new($"Local Voice Charge Arrow {number}");
+            LineRenderer arrow = arrowObject.AddComponent<LineRenderer>();
+            arrow.useWorldSpace = true;
+            arrow.positionCount = 10;
+            arrow.shadowCastingMode =
+                UnityEngine.Rendering.ShadowCastingMode.Off;
+            arrow.receiveShadows = false;
+
+            if (_localVoiceChargeArrowMaterial != null)
+            {
+                arrow.sharedMaterial = _localVoiceChargeArrowMaterial;
+            }
+
+            _localVoiceChargeArrowObjects.Add(arrowObject);
+            _localVoiceChargeArrows.Add(arrow);
+        }
+
+        return _localVoiceChargeArrows[arrowIndex];
+    }
+
+    private void HideLocalVoiceChargeArrows()
+    {
+        HideLocalVoiceChargeArrowsFrom(0);
+    }
+
+    private void HideLocalVoiceChargeArrowsFrom(int firstIndex)
+    {
+        for (int index = firstIndex;
+             index < _localVoiceChargeArrowObjects.Count;
+             index++)
+        {
+            _localVoiceChargeArrowObjects[index].SetActive(false);
         }
     }
 
@@ -828,12 +897,15 @@ public sealed partial class NetworkChessGame
             _localChargeLaserMaterial = null;
         }
 
-        if (_localVoiceChargeArrowObject != null)
+        for (int index = 0;
+             index < _localVoiceChargeArrowObjects.Count;
+             index++)
         {
-            Destroy(_localVoiceChargeArrowObject);
-            _localVoiceChargeArrowObject = null;
-            _localVoiceChargeArrow = null;
+            Destroy(_localVoiceChargeArrowObjects[index]);
         }
+
+        _localVoiceChargeArrowObjects.Clear();
+        _localVoiceChargeArrows.Clear();
 
         if (_localVoiceChargeArrowMaterial != null)
         {

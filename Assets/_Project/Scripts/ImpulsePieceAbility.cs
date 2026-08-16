@@ -29,6 +29,7 @@ public sealed class ImpulsePieceAbility : ChessPieceAbility
 
         piece.KnockbackFileVelocity += impulse.x;
         piece.KnockbackRankVelocity += impulse.y;
+        piece.CollisionChainDepth = 0;
         piece.VoiceHeading = Mathf.Repeat(piece.VoiceHeading + headingChange, 360f);
 
         if (stopCurrentMovement)

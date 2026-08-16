@@ -810,8 +810,17 @@ public sealed class VictorySettings
 [Serializable]
 public sealed class CollisionSettings
 {
-    [SerializeField, Range(0f, 1f)] private float restitution = 0.72f;
-    [SerializeField, Range(0.1f, 5f)] private float impulseMultiplier = 1.15f;
+    [Header("기물 대 기물 - 기본 충돌")]
+    [Tooltip("충돌 후 서로 튕겨 나가는 탄성입니다. 1이면 완전 탄성, 0이면 비탄성입니다.")]
+    [SerializeField, Range(0f, 1f)] private float restitution = 0.9f;
+    [Tooltip("모든 기물 충돌에 적용되는 기본 충격 배율입니다. 에너지 증폭을 막으려면 1 근처를 권장합니다.")]
+    [SerializeField, Range(0.1f, 5f)] private float impulseMultiplier = 1f;
+    [Tooltip("플레이어 명령으로 움직인 기물의 첫 직접 충돌에 적용되는 추가 전달 배율입니다.")]
+    [SerializeField, Range(0.1f, 3f)] private float directImpactMultiplier = 1.35f;
+    [Tooltip("충돌로 밀려난 기물이 다음 기물에 충격을 전달할 때 단계마다 곱해지는 값입니다.")]
+    [SerializeField, Range(0f, 1f)] private float chainTransferMultiplier = 0.5f;
+    [Tooltip("대상이 충돌로 얻을 수 있는 바깥 방향 속도의 상한입니다. 공격자의 접촉 속도에 이 값을 곱합니다.")]
+    [SerializeField, Range(0.1f, 3f)] private float maximumTransferredSpeedRatio = 1.25f;
     [SerializeField, Min(0.01f)] private float separationEpsilon = 0.0001f;
 
     [Header("기물 대 플레이어")]
@@ -822,6 +831,14 @@ public sealed class CollisionSettings
 
     public float Restitution => Mathf.Clamp01(restitution);
     public float ImpulseMultiplier => Mathf.Max(0.1f, impulseMultiplier);
+    public float DirectImpactMultiplier => Mathf.Max(
+        0.1f,
+        directImpactMultiplier);
+    public float ChainTransferMultiplier => Mathf.Clamp01(
+        chainTransferMultiplier);
+    public float MaximumTransferredSpeedRatio => Mathf.Max(
+        0.1f,
+        maximumTransferredSpeedRatio);
     public float SeparationEpsilon => Mathf.Max(0.000001f, separationEpsilon);
     public float PlayerCollisionHeight => Mathf.Max(0.1f, playerCollisionHeight);
     public float MinimumPlayerImpactSpeed => Mathf.Max(0f, minimumPlayerImpactSpeed);
@@ -833,6 +850,12 @@ public sealed class CollisionSettings
     {
         restitution = Mathf.Clamp01(restitution);
         impulseMultiplier = Mathf.Clamp(impulseMultiplier, 0.1f, 5f);
+        directImpactMultiplier = Mathf.Clamp(directImpactMultiplier, 0.1f, 3f);
+        chainTransferMultiplier = Mathf.Clamp01(chainTransferMultiplier);
+        maximumTransferredSpeedRatio = Mathf.Clamp(
+            maximumTransferredSpeedRatio,
+            0.1f,
+            3f);
         separationEpsilon = Mathf.Max(0.000001f, separationEpsilon);
         playerCollisionHeight = Mathf.Max(0.1f, playerCollisionHeight);
         minimumPlayerImpactSpeed = Mathf.Max(0f, minimumPlayerImpactSpeed);

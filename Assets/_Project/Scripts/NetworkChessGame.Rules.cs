@@ -990,7 +990,7 @@ public sealed partial class NetworkChessGame
         piece.VoiceMoveHeadingOffset = headingOffset;
         piece.VoiceMoveLoudness = commandLoudness;
         piece.VoiceChargeDistanceRemaining = 0f;
-        ArmFirstAttackingCollision(ref piece);
+        BeginCommandMomentum(ref piece);
 
         if (settings.MovementControl == PieceMovementControl.Continuous)
         {
@@ -1025,7 +1025,7 @@ public sealed partial class NetworkChessGame
         piece.VoiceMoveHeadingOffset = 0f;
         piece.VoiceMoveLoudness = Mathf.Clamp01(chargePower);
         piece.VoiceChargeDistanceRemaining = Mathf.Max(0f, chargeDistance);
-        ArmFirstAttackingCollision(ref piece);
+        BeginCommandMomentum(ref piece);
 
         if (settings.MovementControl == PieceMovementControl.Continuous)
         {
@@ -1114,10 +1114,11 @@ public sealed partial class NetworkChessGame
         return Mathf.Max(0f, distance);
     }
 
-    private void ArmFirstAttackingCollision(
+    private void BeginCommandMomentum(
         ref NetworkChessPieceState piece)
     {
         ResolvedPieceTraits traits = ResolvePieceTraits(piece);
+        piece.CollisionChainDepth = 0;
         piece.FirstAttackingCollisionAvailable =
             traits.FirstAttackingCollisionOnly &&
             !Mathf.Approximately(traits.AttackingImpactMultiplier, 1f);
@@ -1377,6 +1378,27 @@ public sealed partial class NetworkChessGame
         return gameMode != null
             ? gameMode.Collisions.ImpulseMultiplier
             : collisionImpulseMultiplier;
+    }
+
+    private float ResolveDirectImpactMultiplier()
+    {
+        return gameMode != null
+            ? gameMode.Collisions.DirectImpactMultiplier
+            : 1.35f;
+    }
+
+    private float ResolveChainTransferMultiplier()
+    {
+        return gameMode != null
+            ? gameMode.Collisions.ChainTransferMultiplier
+            : 0.5f;
+    }
+
+    private float ResolveMaximumTransferredSpeedRatio()
+    {
+        return gameMode != null
+            ? gameMode.Collisions.MaximumTransferredSpeedRatio
+            : 1.25f;
     }
 
     private float ResolvePlayerCollisionHeight()

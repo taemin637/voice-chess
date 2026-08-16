@@ -17,6 +17,12 @@
   - 퀸은 질량 `1.6`이며 이동 명령 뒤 첫 공격 충돌 한 번에 상대가 받는 충격을 `130%`로 높인다.
   - **Traits > Charge Distance Multiplier / Charge Growth Rate / Attacking Impact Multiplier / First Attacking Collision Only / Ignore Friendly Piece Collisions**에서 역할 수치를 조절한다. 공격 충격 배율은 충돌을 시작한 기물이 상대에게 주는 속도 변화에만 적용되므로 질량과 독립적이다.
   - 상시 특성과 충돌·충전 계산 사이에는 `ResolvedPieceTraits` 계층이 있다. 네트워크 상태의 `TemporaryPieceTraitModifiers`에 만료 서버 시각과 배율/플래그를 넣으면 같은 계산 경로에서 상시 특성과 합성되므로, 이후 음성 주문 Ability가 일시 특성을 부여할 때 충돌 코드를 다시 분기할 필요가 없다.
+- 연쇄 충돌 제어: **Collisions > 기물 대 기물**에서 직접 타격의 손맛과 연쇄 전달을 따로 조절한다.
+  - **Restitution**은 기본 탄성, **Impulse Multiplier**는 모든 충돌의 물리 충격 배율이다. 기본값은 각각 `0.9 / 1.0`이다.
+  - **Direct Impact Multiplier**는 명령으로 출발한 기물의 첫 충돌 전달력이며 기본 `1.35`다.
+  - **Chain Transfer Multiplier**는 충돌로 날아간 기물이 다음 기물을 칠 때 연쇄 단계마다 곱해진다. 기본 `0.5`이므로 직접 충돌 이후 전달력은 `50% → 25% → 12.5%`로 감소한다.
+  - **Maximum Transferred Speed Ratio**는 대상이 얻는 바깥 방향 속도를 공격 기물의 접촉 속도에 대한 비율로 제한한다. 기본 `1.25`이며 비숍·룩 같은 기물별 공격 충격 배율도 이 상한에 함께 반영된다.
+  - 이동/돌진/Impulse Ability 명령은 연쇄 단계를 `0`으로 시작한다. 실제 충돌 뒤 공격 기물과 밀려난 대상 모두 다음 단계로 넘어가므로 반사된 기물이 다른 기물을 다시 칠 때도 직접 타격 보너스를 반복하지 않는다.
 - 이동 구동 방식: 각 **Piece Archetype > Movement Control**에서 `Continuous (Legacy)` 또는 `Flick Impulse (Alkkagi)`를 선택한다. 기본 모드는 모든 기물이 알까기 방식이다.
   - `Continuous (Legacy)`: 기존처럼 이동 명령 후 `Stop` 명령 전까지 `Move Speed`로 계속 움직인다.
   - `Flick Impulse (Alkkagi)`: 명령 순간에만 힘을 받는다. `Quiet Flick Speed`와 `Loud Flick Speed` 사이에서 실제 음성 dB에 따라 초기 속도가 정해진다.

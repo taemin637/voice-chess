@@ -98,6 +98,13 @@ public static class VoiceChargeBatchValidation
             dashboard.GetPiece(ChessPieceType.Bishop).Traits
                 .AttackingImpactMultiplier,
             1.55f);
+        AssertApproximately(dashboard.Collisions.Restitution, 0.9f);
+        AssertApproximately(dashboard.Collisions.ImpulseMultiplier, 1f);
+        AssertApproximately(dashboard.Collisions.DirectImpactMultiplier, 1.35f);
+        AssertApproximately(dashboard.Collisions.ChainTransferMultiplier, 0.5f);
+        AssertApproximately(
+            dashboard.Collisions.MaximumTransferredSpeedRatio,
+            1.25f);
 
         if (!dashboard.GetPiece(ChessPieceType.Knight).Traits
                 .IgnoreFriendlyPieceCollisions ||
@@ -149,6 +156,26 @@ public static class VoiceChargeBatchValidation
                 PlayerTeam.Black,
                 firstImpactAvailable: false,
                 out _);
+            NetworkChessPieceState firstChainTarget = ResolveTestCollision(
+                game,
+                resolve,
+                ChessPieceType.Pawn,
+                ChessPieceType.Pawn,
+                PlayerTeam.White,
+                PlayerTeam.Black,
+                firstImpactAvailable: false,
+                out _,
+                chainDepth: 1);
+            NetworkChessPieceState secondChainTarget = ResolveTestCollision(
+                game,
+                resolve,
+                ChessPieceType.Pawn,
+                ChessPieceType.Pawn,
+                PlayerTeam.White,
+                PlayerTeam.Black,
+                firstImpactAvailable: false,
+                out _,
+                chainDepth: 2);
             NetworkChessPieceState bishopTarget = ResolveTestCollision(
                 game,
                 resolve,
@@ -174,10 +201,15 @@ public static class VoiceChargeBatchValidation
                     pawnTarget.KnockbackFileVelocity ||
                 bishopTarget.KnockbackFileVelocity <=
                     bishopSecondTarget.KnockbackFileVelocity ||
-                bishopAfterFirstImpact.FirstAttackingCollisionAvailable)
+                bishopAfterFirstImpact.FirstAttackingCollisionAvailable ||
+                pawnTarget.KnockbackFileVelocity > 1.2501f ||
+                firstChainTarget.KnockbackFileVelocity >=
+                    pawnTarget.KnockbackFileVelocity ||
+                secondChainTarget.KnockbackFileVelocity >=
+                    firstChainTarget.KnockbackFileVelocity)
             {
                 throw new InvalidOperationException(
-                    "룩의 낮은 밀침 또는 비숍의 첫 충돌 보너스가 실제 충돌 계산에 적용되지 않습니다.");
+                    "직접 타격, 연쇄 감쇠, 속도 상한 또는 기물별 충돌 특성이 실제 계산에 적용되지 않습니다.");
             }
 
             NetworkChessPieceState friendlyKnightTarget = ResolveTestCollision(
@@ -208,7 +240,8 @@ public static class VoiceChargeBatchValidation
         PlayerTeam attackerTeam,
         PlayerTeam targetTeam,
         bool firstImpactAvailable,
-        out NetworkChessPieceState resolvedAttacker)
+        out NetworkChessPieceState resolvedAttacker,
+        byte chainDepth = 0)
     {
         NetworkChessPieceState attacker = new(
             1,
@@ -218,7 +251,8 @@ public static class VoiceChargeBatchValidation
             0f)
         {
             KnockbackFileVelocity = 1f,
-            FirstAttackingCollisionAvailable = firstImpactAvailable
+            FirstAttackingCollisionAvailable = firstImpactAvailable,
+            CollisionChainDepth = chainDepth
         };
         NetworkChessPieceState target = new(
             2,
@@ -232,7 +266,19 @@ public static class VoiceChargeBatchValidation
             Vector2.zero,
             Vector2.zero
         };
-        resolve.Invoke(game, new object[] { pieces, commandedVelocities });
+        List<Vector2> collisionVelocities = new()
+        {
+            new Vector2(attacker.KnockbackFileVelocity, 0f),
+            Vector2.zero
+        };
+        resolve.Invoke(
+            game,
+            new object[]
+            {
+                pieces,
+                commandedVelocities,
+                collisionVelocities
+            });
         resolvedAttacker = pieces[0];
         return pieces[1];
     }

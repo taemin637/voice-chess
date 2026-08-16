@@ -18,6 +18,8 @@ public struct NetworkChessPieceState :
     INetworkSerializable,
     IEquatable<NetworkChessPieceState>
 {
+    public const byte InactiveCollisionChainDepth = byte.MaxValue;
+
     public ushort Id;
     public PlayerTeam OwnerTeam;
     public ChessPieceType PieceType;
@@ -35,6 +37,7 @@ public struct NetworkChessPieceState :
     public double MovementCooldownEndServerTime;
     public TemporaryPieceTraitModifiers TemporaryTraits;
     public bool FirstAttackingCollisionAvailable;
+    public byte CollisionChainDepth;
 
     public NetworkChessPieceState(
         ushort id,
@@ -60,6 +63,7 @@ public struct NetworkChessPieceState :
         MovementCooldownEndServerTime = 0d;
         TemporaryTraits = default;
         FirstAttackingCollisionAvailable = false;
+        CollisionChainDepth = InactiveCollisionChainDepth;
     }
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer)
@@ -82,6 +86,7 @@ public struct NetworkChessPieceState :
         serializer.SerializeValue(ref MovementCooldownEndServerTime);
         serializer.SerializeValue(ref TemporaryTraits);
         serializer.SerializeValue(ref FirstAttackingCollisionAvailable);
+        serializer.SerializeValue(ref CollisionChainDepth);
     }
 
     public bool Equals(NetworkChessPieceState other)
@@ -104,7 +109,8 @@ public struct NetworkChessPieceState :
                    other.MovementCooldownEndServerTime) &&
                TemporaryTraits.Equals(other.TemporaryTraits) &&
                FirstAttackingCollisionAvailable ==
-               other.FirstAttackingCollisionAvailable;
+               other.FirstAttackingCollisionAvailable &&
+               CollisionChainDepth == other.CollisionChainDepth;
     }
 }
 
@@ -151,9 +157,9 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
     [Tooltip("Collision radius measured in chess-square units.")]
     [SerializeField, Range(0.2f, 0.49f)] private float pieceCollisionRadius = 0.36f;
     [Tooltip("How strongly pieces bounce apart. 0 is inelastic, 1 is fully elastic.")]
-    [SerializeField, Range(0f, 1f)] private float collisionRestitution = 0.72f;
+    [SerializeField, Range(0f, 1f)] private float collisionRestitution = 0.9f;
     [Tooltip("Extra multiplier for the impulse produced by a collision.")]
-    [SerializeField, Range(0.5f, 2f)] private float collisionImpulseMultiplier = 1.15f;
+    [SerializeField, Range(0.5f, 2f)] private float collisionImpulseMultiplier = 1f;
     [Tooltip("How quickly collision knockback loses speed.")]
     [SerializeField, Min(0f)] private float knockbackDrag = 1.8f;
     [Tooltip("Distance past the board edge before a piece is removed.")]
@@ -308,6 +314,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
         float deltaTime = Time.fixedDeltaTime;
         List<NetworkChessPieceState> simulatedPieces = new(_pieces.Count);
         List<Vector2> commandedVelocities = new(_pieces.Count);
+        List<Vector2> collisionVelocities = new(_pieces.Count);
 
         for (int index = 0; index < _pieces.Count; index++)
         {
@@ -342,6 +349,8 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                     commandedVelocity.sqrMagnitude < 0.0001f)
                 {
                     piece.FirstAttackingCollisionAvailable = false;
+                    piece.CollisionChainDepth =
+                        NetworkChessPieceState.InactiveCollisionChainDepth;
                 }
             }
 
@@ -402,9 +411,13 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 : knockbackVelocity.y;
             simulatedPieces.Add(piece);
             commandedVelocities.Add(commandedVelocity);
+            collisionVelocities.Add(commandedVelocity + knockbackVelocity);
         }
 
-        ResolvePieceCollisions(simulatedPieces, commandedVelocities);
+        ResolvePieceCollisions(
+            simulatedPieces,
+            commandedVelocities,
+            collisionVelocities);
         RemoveRingedOutPieces(simulatedPieces);
         ApplySimulatedState(simulatedPieces);
         ServerUpdateRuleState(deltaTime);
@@ -572,7 +585,8 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
 
     private void ResolvePieceCollisions(
         List<NetworkChessPieceState> pieces,
-        List<Vector2> commandedVelocities)
+        List<Vector2> commandedVelocities,
+        List<Vector2> collisionVelocities)
     {
         for (int leftIndex = 0; leftIndex < pieces.Count - 1; leftIndex++)
         {
@@ -622,26 +636,36 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 leftPosition -= correction * leftInverseMass;
                 rightPosition += correction * rightInverseMass;
 
-                Vector2 leftVelocity = commandedVelocities[leftIndex] +
-                    new Vector2(left.KnockbackFileVelocity, left.KnockbackRankVelocity);
-                Vector2 rightVelocity = commandedVelocities[rightIndex] +
-                    new Vector2(right.KnockbackFileVelocity, right.KnockbackRankVelocity);
+                Vector2 leftVelocity = collisionVelocities[leftIndex];
+                Vector2 rightVelocity = collisionVelocities[rightIndex];
                 float closingSpeed = Vector2.Dot(rightVelocity - leftVelocity, normal);
 
                 if (closingSpeed < 0f)
                 {
+                    Vector2 leftVelocityBeforeCollision = leftVelocity;
+                    Vector2 rightVelocityBeforeCollision = rightVelocity;
+                    byte leftChainDepth = left.CollisionChainDepth;
+                    byte rightChainDepth = right.CollisionChainDepth;
                     bool leftIsAttacking = Vector2.Dot(leftVelocity, normal) >
                         0.0001f;
                     bool rightIsAttacking = Vector2.Dot(rightVelocity, -normal) >
                         0.0001f;
-                    float leftAttackingImpact = ResolveAttackingImpactMultiplier(
+                    float leftTraitImpact = ResolveAttackingImpactMultiplier(
                         left,
                         leftTraits,
                         leftIsAttacking);
-                    float rightAttackingImpact = ResolveAttackingImpactMultiplier(
+                    float rightTraitImpact = ResolveAttackingImpactMultiplier(
                         right,
                         rightTraits,
                         rightIsAttacking);
+                    float leftAttackingImpact = leftIsAttacking
+                        ? leftTraitImpact * ResolveMomentumTransferMultiplier(
+                            leftChainDepth)
+                        : 1f;
+                    float rightAttackingImpact = rightIsAttacking
+                        ? rightTraitImpact * ResolveMomentumTransferMultiplier(
+                            rightChainDepth)
+                        : 1f;
                     float impulseMagnitude =
                         -(1f + ResolveRestitution()) * closingSpeed /
                         inverseMassSum * ResolveCollisionImpulseMultiplier();
@@ -651,6 +675,28 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                     rightVelocity += impulse * rightInverseMass *
                         leftAttackingImpact;
 
+                    if (rightIsAttacking)
+                    {
+                        ClampTransferredCollisionSpeed(
+                            ref leftVelocity,
+                            leftVelocityBeforeCollision,
+                            rightVelocityBeforeCollision,
+                            -normal,
+                            rightTraitImpact *
+                            ResolveTransferredSpeedRatio(rightChainDepth));
+                    }
+
+                    if (leftIsAttacking)
+                    {
+                        ClampTransferredCollisionSpeed(
+                            ref rightVelocity,
+                            rightVelocityBeforeCollision,
+                            leftVelocityBeforeCollision,
+                            normal,
+                            leftTraitImpact *
+                            ResolveTransferredSpeedRatio(leftChainDepth));
+                    }
+
                     ConsumeFirstAttackingCollision(
                         ref left,
                         leftTraits,
@@ -659,6 +705,13 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                         ref right,
                         rightTraits,
                         rightIsAttacking);
+                    AdvanceCollisionChain(
+                        ref left,
+                        ref right,
+                        leftChainDepth,
+                        rightChainDepth,
+                        leftIsAttacking,
+                        rightIsAttacking);
 
                     Vector2 leftKnockback = leftVelocity - commandedVelocities[leftIndex];
                     Vector2 rightKnockback = rightVelocity - commandedVelocities[rightIndex];
@@ -666,6 +719,8 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                     left.KnockbackRankVelocity = leftKnockback.y;
                     right.KnockbackFileVelocity = rightKnockback.x;
                     right.KnockbackRankVelocity = rightKnockback.y;
+                    collisionVelocities[leftIndex] = leftVelocity;
+                    collisionVelocities[rightIndex] = rightVelocity;
                 }
 
                 left.BoardFile = leftPosition.x;
@@ -676,6 +731,96 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 pieces[rightIndex] = right;
             }
         }
+    }
+
+    private float ResolveMomentumTransferMultiplier(byte chainDepth)
+    {
+        int resolvedDepth = chainDepth ==
+            NetworkChessPieceState.InactiveCollisionChainDepth
+                ? 0
+                : chainDepth;
+        return ResolveDirectImpactMultiplier() * Mathf.Pow(
+            ResolveChainTransferMultiplier(),
+            resolvedDepth);
+    }
+
+    private float ResolveTransferredSpeedRatio(byte chainDepth)
+    {
+        int resolvedDepth = chainDepth ==
+            NetworkChessPieceState.InactiveCollisionChainDepth
+                ? 0
+                : chainDepth;
+        return ResolveMaximumTransferredSpeedRatio() * Mathf.Pow(
+            ResolveChainTransferMultiplier(),
+            resolvedDepth);
+    }
+
+    private static void ClampTransferredCollisionSpeed(
+        ref Vector2 receiverVelocity,
+        Vector2 receiverVelocityBeforeCollision,
+        Vector2 sourceVelocityBeforeCollision,
+        Vector2 outwardDirection,
+        float maximumSpeedRatio)
+    {
+        float sourceApproachSpeed = Mathf.Max(
+            0f,
+            Vector2.Dot(sourceVelocityBeforeCollision, outwardDirection));
+        float existingOutwardSpeed = Vector2.Dot(
+            receiverVelocityBeforeCollision,
+            outwardDirection);
+        float maximumOutwardSpeed = Mathf.Max(
+            existingOutwardSpeed,
+            sourceApproachSpeed * Mathf.Max(0f, maximumSpeedRatio));
+        float resolvedOutwardSpeed = Vector2.Dot(
+            receiverVelocity,
+            outwardDirection);
+
+        if (resolvedOutwardSpeed > maximumOutwardSpeed)
+        {
+            receiverVelocity -= outwardDirection *
+                (resolvedOutwardSpeed - maximumOutwardSpeed);
+        }
+    }
+
+    private static void AdvanceCollisionChain(
+        ref NetworkChessPieceState left,
+        ref NetworkChessPieceState right,
+        byte leftChainDepth,
+        byte rightChainDepth,
+        bool leftIsAttacking,
+        bool rightIsAttacking)
+    {
+        if (leftIsAttacking)
+        {
+            byte nextDepth = GetNextCollisionChainDepth(leftChainDepth);
+            left.CollisionChainDepth = nextDepth;
+
+            if (!rightIsAttacking)
+            {
+                right.CollisionChainDepth = nextDepth;
+            }
+        }
+
+        if (rightIsAttacking)
+        {
+            byte nextDepth = GetNextCollisionChainDepth(rightChainDepth);
+            right.CollisionChainDepth = nextDepth;
+
+            if (!leftIsAttacking)
+            {
+                left.CollisionChainDepth = nextDepth;
+            }
+        }
+    }
+
+    private static byte GetNextCollisionChainDepth(byte chainDepth)
+    {
+        if (chainDepth == NetworkChessPieceState.InactiveCollisionChainDepth)
+        {
+            return 1;
+        }
+
+        return (byte)Mathf.Min(chainDepth + 1, byte.MaxValue - 1);
     }
 
     private static float ResolveAttackingImpactMultiplier(
@@ -1885,6 +2030,8 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 piece.VoiceTurnAxis = 0;
                 piece.VoiceChargeDistanceRemaining = 0f;
                 piece.FirstAttackingCollisionAvailable = false;
+                piece.CollisionChainDepth =
+                    NetworkChessPieceState.InactiveCollisionChainDepth;
 
                 if (pieceSettings.MovementControl == PieceMovementControl.FlickImpulse)
                 {
