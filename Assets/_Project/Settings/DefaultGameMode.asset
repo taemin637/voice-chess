@@ -128,6 +128,7 @@ MonoBehaviour:
   - pieceType: 1
     acceptsCommands: 1
     movementMode: 0
+    movementCooldownSeconds: 4
     movementControl: 1
     moveSpeed: 1.2
     turnSpeed: 90
@@ -155,6 +156,7 @@ MonoBehaviour:
   - pieceType: 2
     acceptsCommands: 1
     movementMode: 0
+    movementCooldownSeconds: 6
     movementControl: 1
     moveSpeed: 1.2
     turnSpeed: 90
@@ -183,6 +185,7 @@ MonoBehaviour:
   - pieceType: 3
     acceptsCommands: 1
     movementMode: 0
+    movementCooldownSeconds: 8
     movementControl: 1
     moveSpeed: 1.2
     turnSpeed: 90
@@ -199,7 +202,7 @@ MonoBehaviour:
     commandCostMultiplier: 1
     traits:
       chargeDistanceMultiplier: 1
-      chargeGrowthRate: 1
+      chargeGrowthRate: 1.5
       attackingImpactMultiplier: 1.55
       firstAttackingCollisionOnly: 1
       ignoreFriendlyPieceCollisions: 0
@@ -210,6 +213,7 @@ MonoBehaviour:
   - pieceType: 4
     acceptsCommands: 1
     movementMode: 0
+    movementCooldownSeconds: 8
     movementControl: 1
     moveSpeed: 1.2
     turnSpeed: 90
@@ -219,15 +223,15 @@ MonoBehaviour:
     flickLoudnessExponent: 1.35
     accumulateFlickImpulses: 1
     maximumFlickSpeed: 8
-    mass: 2
+    mass: 2.5
     collisionRadius: 0.34
     knockbackDrag: 1.8
     ringOutDistance: 0.8
     commandCostMultiplier: 1
     traits:
       chargeDistanceMultiplier: 0.7
-      chargeGrowthRate: 0.65
-      attackingImpactMultiplier: 0.65
+      chargeGrowthRate: 0.8
+      attackingImpactMultiplier: 0.5
       firstAttackingCollisionOnly: 0
       ignoreFriendlyPieceCollisions: 0
     periodicCaptureIntervalSeconds: 2
@@ -237,6 +241,7 @@ MonoBehaviour:
   - pieceType: 5
     acceptsCommands: 1
     movementMode: 0
+    movementCooldownSeconds: 10
     movementControl: 1
     moveSpeed: 1.2
     turnSpeed: 90
@@ -253,7 +258,7 @@ MonoBehaviour:
     commandCostMultiplier: 1
     traits:
       chargeDistanceMultiplier: 1
-      chargeGrowthRate: 1
+      chargeGrowthRate: 1.25
       attackingImpactMultiplier: 1.3
       firstAttackingCollisionOnly: 1
       ignoreFriendlyPieceCollisions: 0
@@ -264,6 +269,7 @@ MonoBehaviour:
   - pieceType: 6
     acceptsCommands: 1
     movementMode: 0
+    movementCooldownSeconds: 4
     movementControl: 1
     moveSpeed: 1.2
     turnSpeed: 90

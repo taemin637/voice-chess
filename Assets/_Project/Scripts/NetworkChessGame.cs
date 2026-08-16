@@ -452,7 +452,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
             pieceSpawner.UpdateMovementCooldownVisuals(
                 serverTime,
                 IsPieceMovementCooldownEnabled,
-                PieceMovementCooldownDuration);
+                GetPieceMovementCooldownDuration);
         }
 
         UpdateKingDeathCinematic();

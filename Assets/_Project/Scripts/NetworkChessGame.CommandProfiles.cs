@@ -263,8 +263,16 @@ public sealed partial class NetworkChessGame
             return;
         }
 
+        int pieceIndex = FindPieceIndexById(pieceId);
+
+        if (pieceIndex < 0)
+        {
+            return;
+        }
+
         _localPredictedMovementCooldownEnds[pieceId] =
-            Time.unscaledTime + PieceMovementCooldownDuration;
+            Time.unscaledTime + GetPieceMovementCooldownDuration(
+                _pieces[pieceIndex].PieceType);
     }
 
     private void PredictLocalMovementCooldown(

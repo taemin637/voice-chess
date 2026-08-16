@@ -65,6 +65,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         public LineRenderer MovementCooldownArc;
         public double MovementCooldownEndServerTime;
         public Renderer[] Renderers;
+        public Collider[] SelectionColliders;
     }
 
     private static readonly string[] BackRankNames =
@@ -74,6 +75,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
     private readonly GameObject[,] spawnedPieces = new GameObject[8, 8];
     private readonly Dictionary<ushort, NetworkPieceVisual> networkPieceVisuals = new();
+    private readonly RaycastHit[] gazeRaycastHits = new RaycastHit[128];
 
     [Header("기물 프리팹")]
     [SerializeField] private ChessPiecePrefabSet whitePieces = new();
@@ -389,158 +391,65 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             return false;
         }
 
-        Plane[] frustumPlanes = GeometryUtility.CalculateFrustumPlanes(viewCamera);
-        Vector2 screenCenter = viewCamera.pixelRect.center;
-        float bestScreenDistance = float.PositiveInfinity;
-        float bestDepth = float.PositiveInfinity;
-        bool found = false;
+        Ray gazeRay = viewCamera.ScreenPointToRay(viewCamera.pixelRect.center);
+        int hitCount = Physics.RaycastNonAlloc(
+            gazeRay,
+            gazeRaycastHits,
+            viewCamera.farClipPlane,
+            Physics.DefaultRaycastLayers,
+            QueryTriggerInteraction.Collide);
+        float nearestPieceDistance = float.PositiveInfinity;
+        NetworkPieceVisual nearestVisual = null;
 
-        foreach (KeyValuePair<ushort, NetworkPieceVisual> pair in networkPieceVisuals)
+        for (int hitIndex = 0; hitIndex < hitCount; hitIndex++)
         {
-            NetworkPieceVisual visual = pair.Value;
+            RaycastHit hit = gazeRaycastHits[hitIndex];
 
-            if (visual.Instance == null || visual.Team != team ||
-                !TryGetVisualScreenScore(
-                    visual,
-                    viewCamera,
-                    frustumPlanes,
-                    screenCenter,
-                    out float screenDistance,
-                    out float depth))
+            if (hit.collider == null || hit.distance >= nearestPieceDistance ||
+                !TryGetPieceVisual(hit.collider.transform, out ushort hitPieceId,
+                    out NetworkPieceVisual hitVisual))
             {
                 continue;
             }
 
-            if (screenDistance > bestScreenDistance + 0.01f ||
-                (Mathf.Abs(screenDistance - bestScreenDistance) <= 0.01f &&
-                 depth >= bestDepth))
+            nearestPieceDistance = hit.distance;
+            pieceId = hitPieceId;
+            nearestVisual = hitVisual;
+        }
+
+        // The closest piece blocks pieces behind it. An enemy under the reticle
+        // therefore clears the local selection instead of selecting an ally
+        // whose projected bounds happen to overlap the screen centre.
+        return nearestVisual != null && nearestVisual.Team == team;
+    }
+
+    private bool TryGetPieceVisual(
+        Transform hitTransform,
+        out ushort pieceId,
+        out NetworkPieceVisual visual)
+    {
+        foreach (KeyValuePair<ushort, NetworkPieceVisual> pair in
+                 networkPieceVisuals)
+        {
+            Transform instanceTransform = pair.Value.Instance != null
+                ? pair.Value.Instance.transform
+                : null;
+
+            if (instanceTransform == null ||
+                (hitTransform != instanceTransform &&
+                 !hitTransform.IsChildOf(instanceTransform)))
             {
                 continue;
             }
 
-            bestScreenDistance = screenDistance;
-            bestDepth = depth;
             pieceId = pair.Key;
-            found = true;
-        }
-
-        return found;
-    }
-
-    private static bool TryGetVisualScreenScore(
-        NetworkPieceVisual visual,
-        Camera viewCamera,
-        Plane[] frustumPlanes,
-        Vector2 screenPoint,
-        out float screenDistance,
-        out float depth)
-    {
-        screenDistance = float.PositiveInfinity;
-        depth = float.PositiveInfinity;
-        bool found = false;
-
-        if (visual.Renderers == null)
-        {
-            return false;
-        }
-
-        foreach (Renderer pieceRenderer in visual.Renderers)
-        {
-            if (pieceRenderer == null || !pieceRenderer.enabled)
-            {
-                continue;
-            }
-
-            Bounds bounds = pieceRenderer.bounds;
-
-            if (!GeometryUtility.TestPlanesAABB(frustumPlanes, bounds) ||
-                !TryGetProjectedBoundsScreenDistance(
-                    viewCamera,
-                    bounds,
-                    screenPoint,
-                    out float rendererDistance,
-                    out float rendererDepth))
-            {
-                continue;
-            }
-
-            if (rendererDistance > screenDistance + 0.01f ||
-                (Mathf.Abs(rendererDistance - screenDistance) <= 0.01f &&
-                 rendererDepth >= depth))
-            {
-                continue;
-            }
-
-            screenDistance = rendererDistance;
-            depth = rendererDepth;
-            found = true;
-        }
-
-        return found;
-    }
-
-    private static bool TryGetProjectedBoundsScreenDistance(
-        Camera viewCamera,
-        Bounds bounds,
-        Vector2 screenPoint,
-        out float screenDistance,
-        out float depth)
-    {
-        screenDistance = float.PositiveInfinity;
-        depth = float.PositiveInfinity;
-
-        if (bounds.Contains(viewCamera.transform.position))
-        {
-            screenDistance = 0f;
-            depth = 0f;
+            visual = pair.Value;
             return true;
         }
 
-        Vector3 minimum = bounds.min;
-        Vector3 maximum = bounds.max;
-        float minimumX = float.PositiveInfinity;
-        float minimumY = float.PositiveInfinity;
-        float maximumX = float.NegativeInfinity;
-        float maximumY = float.NegativeInfinity;
-        bool foundProjectedCorner = false;
-
-        for (int cornerIndex = 0; cornerIndex < 8; cornerIndex++)
-        {
-            Vector3 corner = new(
-                (cornerIndex & 1) == 0 ? minimum.x : maximum.x,
-                (cornerIndex & 2) == 0 ? minimum.y : maximum.y,
-                (cornerIndex & 4) == 0 ? minimum.z : maximum.z);
-            Vector3 projectedCorner = viewCamera.WorldToScreenPoint(corner);
-
-            if (projectedCorner.z <= viewCamera.nearClipPlane)
-            {
-                continue;
-            }
-
-            minimumX = Mathf.Min(minimumX, projectedCorner.x);
-            minimumY = Mathf.Min(minimumY, projectedCorner.y);
-            maximumX = Mathf.Max(maximumX, projectedCorner.x);
-            maximumY = Mathf.Max(maximumY, projectedCorner.y);
-            foundProjectedCorner = true;
-        }
-
-        if (!foundProjectedCorner)
-        {
-            return false;
-        }
-
-        Vector2 closestScreenPoint = new(
-            Mathf.Clamp(screenPoint.x, minimumX, maximumX),
-            Mathf.Clamp(screenPoint.y, minimumY, maximumY));
-        screenDistance = (screenPoint - closestScreenPoint).sqrMagnitude;
-
-        Ray pointerRay = viewCamera.ScreenPointToRay(screenPoint);
-        depth = bounds.IntersectRay(pointerRay, out float rayDistance)
-            ? rayDistance
-            : Vector3.Dot(
-                bounds.center - viewCamera.transform.position,
-                viewCamera.transform.forward);
-        return true;
+        pieceId = 0;
+        visual = null;
+        return false;
     }
 
     public bool TryGetRepresentativePieceHeight(out float height)
@@ -987,6 +896,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             Renderers = instance.GetComponentsInChildren<Renderer>(includeInactive: false)
         };
 
+        visual.SelectionColliders = EnsurePieceSelectionColliders(visual);
         visual.HeadingArrow = CreateHeadingArrow(visual);
         visual.MovementCooldownVisual = CreateMovementCooldownVisual(
             out visual.MovementCooldownBackground,
@@ -995,6 +905,49 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             pieceState.MovementCooldownEndServerTime;
         UpdateHeadingArrow(visual, position);
         return visual;
+    }
+
+    private static Collider[] EnsurePieceSelectionColliders(
+        NetworkPieceVisual visual)
+    {
+        if (visual.Instance == null)
+        {
+            return Array.Empty<Collider>();
+        }
+
+        Collider[] existingColliders = visual.Instance
+            .GetComponentsInChildren<Collider>(includeInactive: false);
+
+        if (existingColliders.Length > 0)
+        {
+            return existingColliders;
+        }
+
+        List<Collider> selectionColliders = new();
+
+        foreach (Renderer pieceRenderer in visual.Renderers)
+        {
+            if (pieceRenderer == null)
+            {
+                continue;
+            }
+
+            Bounds localBounds = pieceRenderer.localBounds;
+
+            if (localBounds.size.sqrMagnitude <= 0.000001f)
+            {
+                continue;
+            }
+
+            BoxCollider selectionCollider =
+                pieceRenderer.gameObject.AddComponent<BoxCollider>();
+            selectionCollider.center = localBounds.center;
+            selectionCollider.size = localBounds.size;
+            selectionCollider.isTrigger = true;
+            selectionColliders.Add(selectionCollider);
+        }
+
+        return selectionColliders.ToArray();
     }
 
     private GameObject CreateMovementCooldownVisual(
@@ -1051,10 +1004,9 @@ public sealed class ChessPieceSpawner : MonoBehaviour
     public void UpdateMovementCooldownVisuals(
         double serverTime,
         bool systemEnabled,
-        float cooldownDuration)
+        Func<ChessPieceType, float> cooldownDurationResolver)
     {
         const int segments = 48;
-        float safeDuration = Mathf.Max(0.01f, cooldownDuration);
         float squareSize = Mathf.Min(fileSpacing, rankSpacing);
         float radius = squareSize * 0.3f;
         float lineWidth = squareSize * 0.045f;
@@ -1113,7 +1065,11 @@ public sealed class ChessPieceSpawner : MonoBehaviour
                     background.GetPosition(index).normalized * radius);
             }
 
-            float progress = Mathf.Clamp01(remaining / safeDuration);
+            float cooldownDuration = cooldownDurationResolver != null
+                ? cooldownDurationResolver(visual.PieceType)
+                : 0.01f;
+            float progress = Mathf.Clamp01(
+                remaining / Mathf.Max(0.01f, cooldownDuration));
             int pointCount = Mathf.Max(2, Mathf.CeilToInt(progress * segments) + 1);
             visual.MovementCooldownArc.positionCount = pointCount;
             visual.MovementCooldownArc.startWidth = lineWidth;

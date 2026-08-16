@@ -184,6 +184,16 @@ public sealed partial class NetworkChessGame
     public float PieceMovementCooldownDuration => gameMode != null
         ? gameMode.Commands.PieceMovementCooldownSeconds
         : 0f;
+    public float GetPieceMovementCooldownDuration(ChessPieceType pieceType)
+    {
+        if (gameMode == null)
+        {
+            return 0f;
+        }
+
+        return GetPieceSettings(pieceType).ResolveMovementCooldownSeconds(
+            gameMode.Commands.PieceMovementCooldownSeconds);
+    }
     public bool HasCommandRestriction =>
         IsCostSystemEnabled || IsCommandCooldownEnabled;
     public float CommandCooldownDuration => gameMode != null
@@ -951,7 +961,8 @@ public sealed partial class NetworkChessGame
         }
 
         piece.MovementCooldownEndServerTime =
-            NetworkManager.ServerTime.Time + PieceMovementCooldownDuration;
+            NetworkManager.ServerTime.Time +
+            GetPieceMovementCooldownDuration(piece.PieceType);
     }
 
     private static bool TryGetMovementHeadingOffset(

@@ -377,7 +377,8 @@ public sealed class CommandEconomySettings
     [Header("기물별 이동 쿨타임")]
     [Tooltip("켜면 이동 또는 돌진 명령을 받은 기물은 개별 쿨타임 동안 다시 이동 명령을 받을 수 없습니다.")]
     [SerializeField] private bool pieceMovementCooldownEnabled = true;
-    [Tooltip("기물이 이동 또는 돌진 명령을 받은 뒤 다시 이동 명령을 받을 수 있을 때까지의 시간입니다.")]
+    [Tooltip("기물별 설정에서 이동 쿨타임을 0초로 두었을 때 사용하는 기본 시간입니다.")]
+    [InspectorName("기본 이동 쿨타임 (초)")]
     [SerializeField, Min(0.01f)] private float pieceMovementCooldownSeconds = 10f;
     [FormerlySerializedAs("startingPoints")]
     [SerializeField, Min(0f)] private float startingCost = 3f;
@@ -870,6 +871,10 @@ public sealed class PieceArchetypeSettings
     [SerializeField] private bool acceptsCommands = true;
     [SerializeField] private PieceMovementMode movementMode = PieceMovementMode.Free;
 
+    [Header("이동 명령 쿨타임")]
+    [Tooltip("이 종류의 기물이 이동 또는 돌진한 뒤 다시 이동 명령을 받기까지의 시간입니다. 0으로 두면 Commands의 기본 이동 쿨타임을 사용합니다.")]
+    [SerializeField, Min(0f)] private float movementCooldownSeconds;
+
     [Header("이동 방식")]
     [Tooltip("Continuous keeps moving until Stop. Flick Impulse applies one hit and then slows through friction.")]
     [SerializeField] private PieceMovementControl movementControl =
@@ -914,6 +919,12 @@ public sealed class PieceArchetypeSettings
     public ChessPieceType PieceType => pieceType;
     public bool AcceptsCommands => acceptsCommands;
     public PieceMovementMode MovementMode => movementMode;
+    public float ResolveMovementCooldownSeconds(float defaultSeconds)
+    {
+        return movementCooldownSeconds > 0f
+            ? movementCooldownSeconds
+            : Mathf.Max(0.01f, defaultSeconds);
+    }
     public PieceMovementControl MovementControl => movementControl;
     public float MoveSpeed => Mathf.Max(0f, moveSpeed);
     public float TurnSpeed => Mathf.Max(0f, turnSpeed);
@@ -1000,6 +1011,7 @@ public sealed class PieceArchetypeSettings
     {
         moveSpeed = Mathf.Max(0f, moveSpeed);
         turnSpeed = Mathf.Max(0f, turnSpeed);
+        movementCooldownSeconds = Mathf.Max(0f, movementCooldownSeconds);
         quietFlickSpeed = Mathf.Max(0f, quietFlickSpeed);
         loudFlickSpeed = Mathf.Max(quietFlickSpeed, loudFlickSpeed);
         flickFriction = Mathf.Max(0f, flickFriction);
