@@ -33,6 +33,8 @@ public struct NetworkChessPieceState :
     public float KnockbackFileVelocity;
     public float KnockbackRankVelocity;
     public double MovementCooldownEndServerTime;
+    public TemporaryPieceTraitModifiers TemporaryTraits;
+    public bool FirstAttackingCollisionAvailable;
 
     public NetworkChessPieceState(
         ushort id,
@@ -56,6 +58,8 @@ public struct NetworkChessPieceState :
         KnockbackFileVelocity = 0f;
         KnockbackRankVelocity = 0f;
         MovementCooldownEndServerTime = 0d;
+        TemporaryTraits = default;
+        FirstAttackingCollisionAvailable = false;
     }
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer)
@@ -76,6 +80,8 @@ public struct NetworkChessPieceState :
         serializer.SerializeValue(ref KnockbackFileVelocity);
         serializer.SerializeValue(ref KnockbackRankVelocity);
         serializer.SerializeValue(ref MovementCooldownEndServerTime);
+        serializer.SerializeValue(ref TemporaryTraits);
+        serializer.SerializeValue(ref FirstAttackingCollisionAvailable);
     }
 
     public bool Equals(NetworkChessPieceState other)
@@ -95,7 +101,10 @@ public struct NetworkChessPieceState :
                KnockbackFileVelocity.Equals(other.KnockbackFileVelocity) &&
                KnockbackRankVelocity.Equals(other.KnockbackRankVelocity) &&
                MovementCooldownEndServerTime.Equals(
-                   other.MovementCooldownEndServerTime);
+                   other.MovementCooldownEndServerTime) &&
+               TemporaryTraits.Equals(other.TemporaryTraits) &&
+               FirstAttackingCollisionAvailable ==
+               other.FirstAttackingCollisionAvailable;
     }
 }
 
@@ -328,6 +337,12 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
             if (knockbackVelocity.sqrMagnitude < 0.0001f)
             {
                 knockbackVelocity = Vector2.zero;
+
+                if (piece.VoiceChargeDistanceRemaining <= 0.0001f &&
+                    commandedVelocity.sqrMagnitude < 0.0001f)
+                {
+                    piece.FirstAttackingCollisionAvailable = false;
+                }
             }
 
             bool stopChargeKnockbackAfterStep = false;
@@ -539,6 +554,22 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                (piece.VoiceMoveAxis * moveSpeed);
     }
 
+    private double GetCurrentServerTime()
+    {
+        return NetworkManager != null
+            ? NetworkManager.ServerTime.Time
+            : Time.timeAsDouble;
+    }
+
+    private ResolvedPieceTraits ResolvePieceTraits(
+        in NetworkChessPieceState piece)
+    {
+        return new ResolvedPieceTraits(
+            GetPieceSettings(piece.PieceType).Traits,
+            piece.TemporaryTraits,
+            GetCurrentServerTime());
+    }
+
     private void ResolvePieceCollisions(
         List<NetworkChessPieceState> pieces,
         List<Vector2> commandedVelocities)
@@ -549,12 +580,25 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
             {
                 NetworkChessPieceState left = pieces[leftIndex];
                 NetworkChessPieceState right = pieces[rightIndex];
+                PieceArchetypeSettings leftSettings = GetPieceSettings(
+                    left.PieceType);
+                PieceArchetypeSettings rightSettings = GetPieceSettings(
+                    right.PieceType);
+                ResolvedPieceTraits leftTraits = ResolvePieceTraits(left);
+                ResolvedPieceTraits rightTraits = ResolvePieceTraits(right);
+
+                if (left.OwnerTeam == right.OwnerTeam &&
+                    (leftTraits.IgnoreFriendlyPieceCollisions ||
+                     rightTraits.IgnoreFriendlyPieceCollisions))
+                {
+                    continue;
+                }
+
                 Vector2 leftPosition = new(left.BoardFile, left.BoardRank);
                 Vector2 rightPosition = new(right.BoardFile, right.BoardRank);
                 Vector2 separation = rightPosition - leftPosition;
                 float minimumDistance =
-                    GetPieceSettings(left.PieceType).CollisionRadius +
-                    GetPieceSettings(right.PieceType).CollisionRadius;
+                    leftSettings.CollisionRadius + rightSettings.CollisionRadius;
                 float minimumDistanceSquared = minimumDistance * minimumDistance;
                 float distanceSquared = separation.sqrMagnitude;
 
@@ -567,8 +611,10 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 Vector2 normal = distance > ResolveSeparationEpsilon()
                     ? separation / distance
                     : GetStableCollisionNormal(left.Id, right.Id);
-                float leftInverseMass = 1f / GetPieceSettings(left.PieceType).Mass;
-                float rightInverseMass = 1f / GetPieceSettings(right.PieceType).Mass;
+                float leftInverseMass = 1f /
+                    (leftSettings.Mass * leftTraits.MassMultiplier);
+                float rightInverseMass = 1f /
+                    (rightSettings.Mass * rightTraits.MassMultiplier);
                 float inverseMassSum = leftInverseMass + rightInverseMass;
                 float penetration = minimumDistance - distance;
                 Vector2 correction = normal * (penetration / inverseMassSum);
@@ -584,12 +630,35 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
 
                 if (closingSpeed < 0f)
                 {
+                    bool leftIsAttacking = Vector2.Dot(leftVelocity, normal) >
+                        0.0001f;
+                    bool rightIsAttacking = Vector2.Dot(rightVelocity, -normal) >
+                        0.0001f;
+                    float leftAttackingImpact = ResolveAttackingImpactMultiplier(
+                        left,
+                        leftTraits,
+                        leftIsAttacking);
+                    float rightAttackingImpact = ResolveAttackingImpactMultiplier(
+                        right,
+                        rightTraits,
+                        rightIsAttacking);
                     float impulseMagnitude =
                         -(1f + ResolveRestitution()) * closingSpeed /
                         inverseMassSum * ResolveCollisionImpulseMultiplier();
                     Vector2 impulse = normal * impulseMagnitude;
-                    leftVelocity -= impulse * leftInverseMass;
-                    rightVelocity += impulse * rightInverseMass;
+                    leftVelocity -= impulse * leftInverseMass *
+                        rightAttackingImpact;
+                    rightVelocity += impulse * rightInverseMass *
+                        leftAttackingImpact;
+
+                    ConsumeFirstAttackingCollision(
+                        ref left,
+                        leftTraits,
+                        leftIsAttacking);
+                    ConsumeFirstAttackingCollision(
+                        ref right,
+                        rightTraits,
+                        rightIsAttacking);
 
                     Vector2 leftKnockback = leftVelocity - commandedVelocities[leftIndex];
                     Vector2 rightKnockback = rightVelocity - commandedVelocities[rightIndex];
@@ -606,6 +675,32 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 pieces[leftIndex] = left;
                 pieces[rightIndex] = right;
             }
+        }
+    }
+
+    private static float ResolveAttackingImpactMultiplier(
+        in NetworkChessPieceState piece,
+        in ResolvedPieceTraits traits,
+        bool isAttacking)
+    {
+        if (!isAttacking ||
+            (traits.FirstAttackingCollisionOnly &&
+             !piece.FirstAttackingCollisionAvailable))
+        {
+            return 1f;
+        }
+
+        return traits.AttackingImpactMultiplier;
+    }
+
+    private static void ConsumeFirstAttackingCollision(
+        ref NetworkChessPieceState piece,
+        in ResolvedPieceTraits traits,
+        bool isAttacking)
+    {
+        if (isAttacking && traits.FirstAttackingCollisionOnly)
+        {
+            piece.FirstAttackingCollisionAvailable = false;
         }
     }
 
@@ -1632,7 +1727,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                     commandLoudness,
                     pronunciationScore);
                 float chargeDistance = GetVoiceChargeDistance(
-                    piece.PieceType,
+                    piece,
                     chargePower);
                 ApplyVoiceChargedMovement(
                     ref piece,
@@ -1756,7 +1851,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                     commandLoudness,
                     pronunciationScore);
                 float chargeDistance = GetVoiceChargeDistance(
-                    piece.PieceType,
+                    piece,
                     chargePower);
                 ApplyVoiceChargedMovement(
                     ref piece,
@@ -1789,6 +1884,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 piece.VoiceMoveAxis = 0;
                 piece.VoiceTurnAxis = 0;
                 piece.VoiceChargeDistanceRemaining = 0f;
+                piece.FirstAttackingCollisionAvailable = false;
 
                 if (pieceSettings.MovementControl == PieceMovementControl.FlickImpulse)
                 {

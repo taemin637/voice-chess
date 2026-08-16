@@ -538,7 +538,7 @@ public sealed partial class NetworkChessGame
             normalizedLoudness,
             pronunciationScore);
         _localVoiceChargePreviewDistance = GetVoiceChargeDistance(
-            piece.PieceType,
+            piece,
             _localVoiceChargePreviewPower);
 
         bool previewAimValid = useStoredAim || _localChargeAimValid;

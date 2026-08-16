@@ -134,11 +134,17 @@ MonoBehaviour:
     flickLoudnessExponent: 1.35
     accumulateFlickImpulses: 1
     maximumFlickSpeed: 8
-    mass: 0.8
+    mass: 1
     collisionRadius: 0.34
     knockbackDrag: 1.8
     ringOutDistance: 0.8
     commandCostMultiplier: 1
+    traits:
+      chargeDistanceMultiplier: 1
+      chargeGrowthRate: 1
+      attackingImpactMultiplier: 1
+      firstAttackingCollisionOnly: 0
+      ignoreFriendlyPieceCollisions: 0
     periodicCaptureIntervalSeconds: 1
     periodicCapturePoints: 1
     finalCaptureValue: 1
@@ -155,11 +161,17 @@ MonoBehaviour:
     flickLoudnessExponent: 1.35
     accumulateFlickImpulses: 1
     maximumFlickSpeed: 8
-    mass: 1.05
+    mass: 1.5
     collisionRadius: 0.34
     knockbackDrag: 1.8
     ringOutDistance: 0.8
     commandCostMultiplier: 1
+    traits:
+      chargeDistanceMultiplier: 1
+      chargeGrowthRate: 1
+      attackingImpactMultiplier: 1
+      firstAttackingCollisionOnly: 0
+      ignoreFriendlyPieceCollisions: 1
     periodicCaptureIntervalSeconds: 1.25
     periodicCapturePoints: 2
     finalCaptureValue: 3
@@ -177,11 +189,17 @@ MonoBehaviour:
     flickLoudnessExponent: 1.35
     accumulateFlickImpulses: 1
     maximumFlickSpeed: 8
-    mass: 0.95
+    mass: 1.25
     collisionRadius: 0.34
     knockbackDrag: 1.8
     ringOutDistance: 0.8
     commandCostMultiplier: 1
+    traits:
+      chargeDistanceMultiplier: 1
+      chargeGrowthRate: 1
+      attackingImpactMultiplier: 1.55
+      firstAttackingCollisionOnly: 1
+      ignoreFriendlyPieceCollisions: 0
     periodicCaptureIntervalSeconds: 1.5
     periodicCapturePoints: 2
     finalCaptureValue: 3
@@ -192,17 +210,23 @@ MonoBehaviour:
     movementControl: 1
     moveSpeed: 1.2
     turnSpeed: 90
-    quietFlickSpeed: 1.5
-    loudFlickSpeed: 5
+    quietFlickSpeed: 1.2
+    loudFlickSpeed: 4
     flickFriction: 3.5
     flickLoudnessExponent: 1.35
     accumulateFlickImpulses: 1
     maximumFlickSpeed: 8
-    mass: 1.35
+    mass: 2
     collisionRadius: 0.34
     knockbackDrag: 1.8
     ringOutDistance: 0.8
     commandCostMultiplier: 1
+    traits:
+      chargeDistanceMultiplier: 0.7
+      chargeGrowthRate: 0.65
+      attackingImpactMultiplier: 0.65
+      firstAttackingCollisionOnly: 0
+      ignoreFriendlyPieceCollisions: 0
     periodicCaptureIntervalSeconds: 2
     periodicCapturePoints: 3
     finalCaptureValue: 5
@@ -219,11 +243,17 @@ MonoBehaviour:
     flickLoudnessExponent: 1.35
     accumulateFlickImpulses: 1
     maximumFlickSpeed: 8
-    mass: 1.15
+    mass: 1.6
     collisionRadius: 0.34
     knockbackDrag: 1.8
     ringOutDistance: 0.8
     commandCostMultiplier: 1
+    traits:
+      chargeDistanceMultiplier: 1
+      chargeGrowthRate: 1
+      attackingImpactMultiplier: 1.3
+      firstAttackingCollisionOnly: 1
+      ignoreFriendlyPieceCollisions: 0
     periodicCaptureIntervalSeconds: 2
     periodicCapturePoints: 4
     finalCaptureValue: 9
@@ -245,6 +275,12 @@ MonoBehaviour:
     knockbackDrag: 1.8
     ringOutDistance: 0
     commandCostMultiplier: 1
+    traits:
+      chargeDistanceMultiplier: 1
+      chargeGrowthRate: 1
+      attackingImpactMultiplier: 1
+      firstAttackingCollisionOnly: 0
+      ignoreFriendlyPieceCollisions: 0
     periodicCaptureIntervalSeconds: 2.5
     periodicCapturePoints: 5
     finalCaptureValue: 10
@@ -380,6 +416,6 @@ MonoBehaviour:
       height: 78
     pauseMenuKey: 60
   editorSoloTest:
-    enabled: 0
+    enabled: 1
     playerTeam: 1
     startupTimeoutSeconds: 10

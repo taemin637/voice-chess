@@ -56,7 +56,7 @@ public sealed class GameModeConfigurationEditor : Editor
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("기물과 보드", EditorStyles.boldLabel);
-        DrawProperty("pieceArchetypes", "기물별 이동 · 무게 · 점수 · 스킬");
+        DrawProperty("pieceArchetypes", "기물별 이동 · 무게 · 특성 · 점수 · 스킬");
         DrawProperty("boardSetup", "초기 기물 배치");
         DrawProperty("boardPresentation", "보드 및 기물 표시");
         DrawProperty("collisions", "충돌 규칙");

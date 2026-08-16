@@ -303,11 +303,11 @@ public sealed partial class NetworkChessGame
                 voiceTurnSpeed,
                 pieceType switch
                 {
-                    ChessPieceType.Pawn => 0.8f,
-                    ChessPieceType.Knight => 1.05f,
-                    ChessPieceType.Bishop => 0.95f,
-                    ChessPieceType.Rook => 1.35f,
-                    ChessPieceType.Queen => 1.15f,
+                    ChessPieceType.Pawn => 1f,
+                    ChessPieceType.Knight => 1.5f,
+                    ChessPieceType.Bishop => 1.25f,
+                    ChessPieceType.Rook => 2f,
+                    ChessPieceType.Queen => 1.6f,
                     ChessPieceType.King => 1.4f,
                     _ => 1f
                 },
@@ -990,6 +990,7 @@ public sealed partial class NetworkChessGame
         piece.VoiceMoveHeadingOffset = headingOffset;
         piece.VoiceMoveLoudness = commandLoudness;
         piece.VoiceChargeDistanceRemaining = 0f;
+        ArmFirstAttackingCollision(ref piece);
 
         if (settings.MovementControl == PieceMovementControl.Continuous)
         {
@@ -1024,6 +1025,7 @@ public sealed partial class NetworkChessGame
         piece.VoiceMoveHeadingOffset = 0f;
         piece.VoiceMoveLoudness = Mathf.Clamp01(chargePower);
         piece.VoiceChargeDistanceRemaining = Mathf.Max(0f, chargeDistance);
+        ArmFirstAttackingCollision(ref piece);
 
         if (settings.MovementControl == PieceMovementControl.Continuous)
         {
@@ -1067,13 +1069,38 @@ public sealed partial class NetworkChessGame
         ChessPieceType pieceType,
         float chargePower)
     {
+        PieceArchetypeSettings settings = GetPieceSettings(pieceType);
+        ResolvedPieceTraits traits = new(
+            settings.Traits,
+            default,
+            GetCurrentServerTime());
+        return GetVoiceChargeDistance(settings, traits, chargePower);
+    }
+
+    public float GetVoiceChargeDistance(
+        in NetworkChessPieceState piece,
+        float chargePower)
+    {
+        PieceArchetypeSettings settings = GetPieceSettings(piece.PieceType);
+        return GetVoiceChargeDistance(
+            settings,
+            ResolvePieceTraits(piece),
+            chargePower);
+    }
+
+    private float GetVoiceChargeDistance(
+        PieceArchetypeSettings settings,
+        in ResolvedPieceTraits traits,
+        float chargePower)
+    {
         if (gameMode == null)
         {
             return 0f;
         }
 
-        PieceArchetypeSettings settings = GetPieceSettings(pieceType);
-        float distance = gameMode.Commands.GetVoiceChargeDistance(chargePower);
+        float shapedChargePower = traits.ShapeChargePower(chargePower);
+        float distance = gameMode.Commands.GetVoiceChargeDistance(
+            shapedChargePower) * traits.ChargeDistanceMultiplier;
 
         if (settings.MovementControl == PieceMovementControl.FlickImpulse &&
             settings.FlickFriction > 0.0001f)
@@ -1085,6 +1112,15 @@ public sealed partial class NetworkChessGame
         }
 
         return Mathf.Max(0f, distance);
+    }
+
+    private void ArmFirstAttackingCollision(
+        ref NetworkChessPieceState piece)
+    {
+        ResolvedPieceTraits traits = ResolvePieceTraits(piece);
+        piece.FirstAttackingCollisionAvailable =
+            traits.FirstAttackingCollisionOnly &&
+            !Mathf.Approximately(traits.AttackingImpactMultiplier, 1f);
     }
 
     private static Vector2 DeceleratePhysicalVelocity(
@@ -1310,7 +1346,8 @@ public sealed partial class NetworkChessGame
         ChessPieceAbilityContext context = new(
             piece.OwnerTeam,
             commandLoudness,
-            piece.OwnerTeam == PlayerTeam.Black ? Vector2.down : Vector2.up);
+            piece.OwnerTeam == PlayerTeam.Black ? Vector2.down : Vector2.up,
+            now);
 
         if (!ability.TryExecute(ref piece, context, out _))
         {

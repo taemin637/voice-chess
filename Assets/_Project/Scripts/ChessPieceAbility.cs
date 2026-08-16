@@ -5,17 +5,20 @@ public readonly struct ChessPieceAbilityContext
     public readonly PlayerTeam Team;
     public readonly float CommandLoudness;
     public readonly Vector2 TeamForward;
+    public readonly double ServerTime;
 
     public ChessPieceAbilityContext(
         PlayerTeam team,
         float commandLoudness,
-        Vector2 teamForward)
+        Vector2 teamForward,
+        double serverTime = 0d)
     {
         Team = team;
         CommandLoudness = Mathf.Clamp01(commandLoudness);
         TeamForward = teamForward.sqrMagnitude > 0f
             ? teamForward.normalized
             : Vector2.up;
+        ServerTime = serverTime;
     }
 }
 

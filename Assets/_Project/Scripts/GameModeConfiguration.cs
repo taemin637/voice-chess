@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Serialization;
@@ -90,6 +91,209 @@ public enum PieceMovementControl : byte
     Continuous,
     [InspectorName("Flick Impulse (Alkkagi)")]
     FlickImpulse
+}
+
+[Flags]
+public enum PieceTraitFlags : byte
+{
+    None = 0,
+    IgnoreFriendlyPieceCollisions = 1 << 0,
+    FirstAttackingCollisionOnly = 1 << 1
+}
+
+/// <summary>
+/// Permanent archetype traits. Collision and movement code consumes this common
+/// description instead of branching on the chess-piece type, so the same values
+/// can also be supplied by a temporary spell effect later.
+/// </summary>
+[Serializable]
+public sealed class PieceTraitSettings
+{
+    [Header("돌진 특성")]
+    [Tooltip("최종 돌진 거리에 곱해지는 값입니다. 1보다 작으면 같은 충전 세기에서도 이동 거리가 짧습니다.")]
+    [SerializeField, Min(0.01f)] private float chargeDistanceMultiplier = 1f;
+    [Tooltip("우클릭/음성 충전 곡선의 성장 속도입니다. 1보다 작으면 초반에 거리가 더 천천히 증가하지만 최대 충전에는 도달합니다.")]
+    [SerializeField, Min(0.05f)] private float chargeGrowthRate = 1f;
+
+    [Header("충돌 특성")]
+    [Tooltip("이 기물이 상대를 향해 이동하며 충돌할 때 상대가 받는 충격 배율입니다. 질량과 독립적으로 적용됩니다.")]
+    [SerializeField, Min(0f)] private float attackingImpactMultiplier = 1f;
+    [Tooltip("켜면 공격 충격 배율을 이동 명령 후 처음 충돌한 한 대상에게만 적용합니다.")]
+    [SerializeField] private bool firstAttackingCollisionOnly;
+    [Tooltip("켜면 이 기물은 같은 팀의 다른 기물과 서로 통과합니다.")]
+    [SerializeField] private bool ignoreFriendlyPieceCollisions;
+
+    public float ChargeDistanceMultiplier => Mathf.Max(
+        0.01f,
+        chargeDistanceMultiplier);
+    public float ChargeGrowthRate => Mathf.Max(0.05f, chargeGrowthRate);
+    public float AttackingImpactMultiplier => Mathf.Max(
+        0f,
+        attackingImpactMultiplier);
+    public bool FirstAttackingCollisionOnly => firstAttackingCollisionOnly;
+    public bool IgnoreFriendlyPieceCollisions => ignoreFriendlyPieceCollisions;
+
+    public float ShapeChargePower(float chargePower)
+    {
+        return Mathf.Pow(
+            Mathf.Clamp01(chargePower),
+            1f / ChargeGrowthRate);
+    }
+
+    public static PieceTraitSettings CreateDefault(ChessPieceType pieceType)
+    {
+        PieceTraitSettings settings = new();
+
+        switch (pieceType)
+        {
+            case ChessPieceType.Rook:
+                settings.chargeDistanceMultiplier = 0.7f;
+                settings.chargeGrowthRate = 0.65f;
+                settings.attackingImpactMultiplier = 0.65f;
+                break;
+            case ChessPieceType.Bishop:
+                settings.attackingImpactMultiplier = 1.55f;
+                settings.firstAttackingCollisionOnly = true;
+                break;
+            case ChessPieceType.Knight:
+                settings.ignoreFriendlyPieceCollisions = true;
+                break;
+            case ChessPieceType.Queen:
+                settings.attackingImpactMultiplier = 1.3f;
+                settings.firstAttackingCollisionOnly = true;
+                break;
+        }
+
+        return settings;
+    }
+
+    public void Validate()
+    {
+        chargeDistanceMultiplier = Mathf.Max(0.01f, chargeDistanceMultiplier);
+        chargeGrowthRate = Mathf.Max(0.05f, chargeGrowthRate);
+        attackingImpactMultiplier = Mathf.Max(0f, attackingImpactMultiplier);
+    }
+}
+
+/// <summary>
+/// Optional, networked, time-limited additions to an archetype's permanent
+/// traits. No current piece starts with one; future voice-spell abilities can put
+/// this value on a piece without changing the collision or charge systems.
+/// </summary>
+[Serializable]
+public struct TemporaryPieceTraitModifiers :
+    INetworkSerializable,
+    IEquatable<TemporaryPieceTraitModifiers>
+{
+    public float MassMultiplier;
+    public float ChargeDistanceMultiplier;
+    public float ChargeGrowthRateMultiplier;
+    public float AttackingImpactMultiplier;
+    public PieceTraitFlags AddedFlags;
+    public double ExpiresAtServerTime;
+
+    public TemporaryPieceTraitModifiers(
+        double expiresAtServerTime,
+        float massMultiplier = 1f,
+        float chargeDistanceMultiplier = 1f,
+        float chargeGrowthRateMultiplier = 1f,
+        float attackingImpactMultiplier = 1f,
+        PieceTraitFlags addedFlags = PieceTraitFlags.None)
+    {
+        MassMultiplier = Mathf.Max(0.01f, massMultiplier);
+        ChargeDistanceMultiplier = Mathf.Max(0.01f, chargeDistanceMultiplier);
+        ChargeGrowthRateMultiplier = Mathf.Max(0.05f, chargeGrowthRateMultiplier);
+        AttackingImpactMultiplier = Mathf.Max(0f, attackingImpactMultiplier);
+        AddedFlags = addedFlags;
+        ExpiresAtServerTime = expiresAtServerTime;
+    }
+
+    public bool IsActive(double serverTime)
+    {
+        return ExpiresAtServerTime > serverTime;
+    }
+
+    public float ResolvedMassMultiplier => MassMultiplier > 0f
+        ? MassMultiplier
+        : 1f;
+    public float ResolvedChargeDistanceMultiplier =>
+        ChargeDistanceMultiplier > 0f ? ChargeDistanceMultiplier : 1f;
+    public float ResolvedChargeGrowthRateMultiplier =>
+        ChargeGrowthRateMultiplier > 0f ? ChargeGrowthRateMultiplier : 1f;
+    public float ResolvedAttackingImpactMultiplier =>
+        Mathf.Max(0f, AttackingImpactMultiplier);
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer)
+        where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref MassMultiplier);
+        serializer.SerializeValue(ref ChargeDistanceMultiplier);
+        serializer.SerializeValue(ref ChargeGrowthRateMultiplier);
+        serializer.SerializeValue(ref AttackingImpactMultiplier);
+        serializer.SerializeValue(ref AddedFlags);
+        serializer.SerializeValue(ref ExpiresAtServerTime);
+    }
+
+    public bool Equals(TemporaryPieceTraitModifiers other)
+    {
+        return MassMultiplier.Equals(other.MassMultiplier) &&
+               ChargeDistanceMultiplier.Equals(other.ChargeDistanceMultiplier) &&
+               ChargeGrowthRateMultiplier.Equals(
+                   other.ChargeGrowthRateMultiplier) &&
+               AttackingImpactMultiplier.Equals(other.AttackingImpactMultiplier) &&
+               AddedFlags == other.AddedFlags &&
+               ExpiresAtServerTime.Equals(other.ExpiresAtServerTime);
+    }
+}
+
+public readonly struct ResolvedPieceTraits
+{
+    public readonly float MassMultiplier;
+    public readonly float ChargeDistanceMultiplier;
+    public readonly float ChargeGrowthRate;
+    public readonly float AttackingImpactMultiplier;
+    public readonly bool FirstAttackingCollisionOnly;
+    public readonly bool IgnoreFriendlyPieceCollisions;
+
+    public ResolvedPieceTraits(
+        PieceTraitSettings permanentTraits,
+        in TemporaryPieceTraitModifiers temporaryTraits,
+        double serverTime)
+    {
+        permanentTraits ??= new PieceTraitSettings();
+        bool hasTemporaryTraits = temporaryTraits.IsActive(serverTime);
+        MassMultiplier = hasTemporaryTraits
+            ? temporaryTraits.ResolvedMassMultiplier
+            : 1f;
+        ChargeDistanceMultiplier = permanentTraits.ChargeDistanceMultiplier *
+            (hasTemporaryTraits
+                ? temporaryTraits.ResolvedChargeDistanceMultiplier
+                : 1f);
+        ChargeGrowthRate = permanentTraits.ChargeGrowthRate *
+            (hasTemporaryTraits
+                ? temporaryTraits.ResolvedChargeGrowthRateMultiplier
+                : 1f);
+        AttackingImpactMultiplier = permanentTraits.AttackingImpactMultiplier *
+            (hasTemporaryTraits
+                ? temporaryTraits.ResolvedAttackingImpactMultiplier
+                : 1f);
+        PieceTraitFlags addedFlags = hasTemporaryTraits
+            ? temporaryTraits.AddedFlags
+            : PieceTraitFlags.None;
+        FirstAttackingCollisionOnly =
+            permanentTraits.FirstAttackingCollisionOnly ||
+            (addedFlags & PieceTraitFlags.FirstAttackingCollisionOnly) != 0;
+        IgnoreFriendlyPieceCollisions =
+            permanentTraits.IgnoreFriendlyPieceCollisions ||
+            (addedFlags & PieceTraitFlags.IgnoreFriendlyPieceCollisions) != 0;
+    }
+
+    public float ShapeChargePower(float chargePower)
+    {
+        return Mathf.Pow(
+            Mathf.Clamp01(chargePower),
+            1f / Mathf.Max(0.05f, ChargeGrowthRate));
+    }
 }
 
 public enum CaptureScoringRule : byte
@@ -672,6 +876,9 @@ public sealed class PieceArchetypeSettings
     [SerializeField, Min(0f)] private float ringOutDistance = 0.8f;
     [SerializeField, Min(0f)] private float commandCostMultiplier = 1f;
 
+    [Header("고유 특성")]
+    [SerializeField] private PieceTraitSettings traits = new();
+
     [Header("점령전 점수")]
     [Tooltip("Periodic rule: this piece earns the amount whenever its independent timer completes while inside a zone.")]
     [SerializeField, Min(0.01f)] private float periodicCaptureIntervalSeconds = 1f;
@@ -695,6 +902,8 @@ public sealed class PieceArchetypeSettings
     public float KnockbackDrag => Mathf.Max(0f, knockbackDrag);
     public float RingOutDistance => Mathf.Max(0f, ringOutDistance);
     public float CommandCostMultiplier => Mathf.Max(0f, commandCostMultiplier);
+    public PieceTraitSettings Traits => traits ?? PieceTraitSettings.CreateDefault(
+        pieceType);
     public float PeriodicCaptureIntervalSeconds =>
         Mathf.Max(0.01f, periodicCaptureIntervalSeconds);
     public float PeriodicCapturePoints => Mathf.Max(0f, periodicCapturePoints);
@@ -720,16 +929,24 @@ public sealed class PieceArchetypeSettings
             movementControl = PieceMovementControl.FlickImpulse,
             mass = pieceType switch
             {
-                ChessPieceType.Pawn => 0.8f,
-                ChessPieceType.Knight => 1.05f,
-                ChessPieceType.Bishop => 0.95f,
-                ChessPieceType.Rook => 1.35f,
-                ChessPieceType.Queen => 1.15f,
+                ChessPieceType.Pawn => 1f,
+                ChessPieceType.Knight => 1.5f,
+                ChessPieceType.Bishop => 1.25f,
+                ChessPieceType.Rook => 2f,
+                ChessPieceType.Queen => 1.6f,
                 ChessPieceType.King => 1.4f,
                 _ => 1f
             },
+            traits = PieceTraitSettings.CreateDefault(pieceType),
             ringOutDistance = pieceType == ChessPieceType.King ? 0f : 0.8f
         };
+
+        if (pieceType == ChessPieceType.Rook)
+        {
+            settings.quietFlickSpeed = 1.2f;
+            settings.loudFlickSpeed = 4f;
+        }
+
         return settings;
     }
 
@@ -770,6 +987,8 @@ public sealed class PieceArchetypeSettings
         knockbackDrag = Mathf.Max(0f, knockbackDrag);
         ringOutDistance = Mathf.Max(0f, ringOutDistance);
         commandCostMultiplier = Mathf.Max(0f, commandCostMultiplier);
+        traits ??= PieceTraitSettings.CreateDefault(pieceType);
+        traits.Validate();
         periodicCaptureIntervalSeconds = Mathf.Max(
             0.01f,
             periodicCaptureIntervalSeconds);

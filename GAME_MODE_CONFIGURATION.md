@@ -9,7 +9,14 @@
 - 플레이어가 킹: **Victory > Royal Unit Mode**를 `Player Commander`로 바꾸면 시작 배치에서 양 팀의 보드 킹이 빠지고, 각 플레이어 아바타가 **Board Presentation**에 등록된 자기 팀 킹 모델을 그대로 사용한다. `Board King And Player Commander`를 선택하면 보드 킹도 남고 플레이어 역시 킹 모델을 사용한다. Royal Requirement를 조합하면 둘 중 하나 또는 둘 다 사망해야 패배하도록 만들 수 있다. 플레이어 피해/장외 시스템에서는 서버에서 `NetworkPlayer.ServerSetEliminated(true)`를 호출한다.
   - 라운드 시작 때 플레이어 킹은 자기 팀의 초기 킹 배치 칸(기본 흰색 e1, 검은색 e8)으로 이동한다. **Players > 플레이어 킹 시작 위치와 시점**에서 초기 배치 추적 여부, 킹이 없을 때의 팀별 예비 좌표, 팀별 시작 시야 각도, 킹 모델 높이에 대한 카메라 비율을 조절한다.
   - 플레이어 킹은 기본적으로 자기 팀 기물과도 충돌한다. 경기장 경계를 넘으면 당시 수평 속도를 유지한 채 아래로 떨어지고, 설정 깊이에 도달하면 장외 사망 처리되어 기존 Royal Requirement 규칙으로 승패를 판정한다. **Players > 플레이어 킹 시작 위치와 시점**에서 아군 충돌, 장외 낙하, 낙하 중력, 사망 깊이와 장외 좌표 한계를 각각 조절한다.
-- 기물별 차이: **Piece Archetypes**에서 이동/회전 속도, 질량, 충돌 반경, 넉백 감쇠, 장외 여유 거리, 명령 코스트 배수, 주기 점령 간격·점수, 최종 점령 가치, 이동 제약과 Ability 자산을 조절한다.
+- 기물별 차이: **Piece Archetypes**에서 이동/회전 속도, 질량, 충돌 반경, 넉백 감쇠, 장외 여유 거리, 명령 코스트 배수, 고유 특성, 주기 점령 간격·점수, 최종 점령 가치, 이동 제약과 Ability 자산을 조절한다.
+  - 폰은 질량 `1`의 기준 기물이며 별도 특성이 없다.
+  - 룩은 질량 `2`로 잘 밀리지 않는다. 돌진 거리는 기준의 `70%`, 충전 성장 속도는 `65%`, 일반 알까기 속도는 `1.2~4.0`이며, 공격 충격은 `65%`로 낮춰 무거운 질량이 공격력으로 직결되지 않게 했다.
+  - 비숍은 질량 `1.25`이며 이동 명령 뒤 첫 공격 충돌 한 번에만 상대가 받는 충격을 `155%`로 높인다.
+  - 나이트는 질량 `1.5`이며 아군 기물과는 충돌하지 않고 서로 통과한다. 적 기물과의 충돌은 그대로 적용된다.
+  - 퀸은 질량 `1.6`이며 이동 명령 뒤 첫 공격 충돌 한 번에 상대가 받는 충격을 `130%`로 높인다.
+  - **Traits > Charge Distance Multiplier / Charge Growth Rate / Attacking Impact Multiplier / First Attacking Collision Only / Ignore Friendly Piece Collisions**에서 역할 수치를 조절한다. 공격 충격 배율은 충돌을 시작한 기물이 상대에게 주는 속도 변화에만 적용되므로 질량과 독립적이다.
+  - 상시 특성과 충돌·충전 계산 사이에는 `ResolvedPieceTraits` 계층이 있다. 네트워크 상태의 `TemporaryPieceTraitModifiers`에 만료 서버 시각과 배율/플래그를 넣으면 같은 계산 경로에서 상시 특성과 합성되므로, 이후 음성 주문 Ability가 일시 특성을 부여할 때 충돌 코드를 다시 분기할 필요가 없다.
 - 이동 구동 방식: 각 **Piece Archetype > Movement Control**에서 `Continuous (Legacy)` 또는 `Flick Impulse (Alkkagi)`를 선택한다. 기본 모드는 모든 기물이 알까기 방식이다.
   - `Continuous (Legacy)`: 기존처럼 이동 명령 후 `Stop` 명령 전까지 `Move Speed`로 계속 움직인다.
   - `Flick Impulse (Alkkagi)`: 명령 순간에만 힘을 받는다. `Quiet Flick Speed`와 `Loud Flick Speed` 사이에서 실제 음성 dB에 따라 초기 속도가 정해진다.
