@@ -302,14 +302,14 @@ MonoBehaviour:
     cameraFieldOfView: 48
   boardPresentation:
     whitePieces:
-      king: {fileID: 919132149155446097, guid: 3e5a738646aa87c40954abc295886aa5, type: 3}
+      king: {fileID: 6329351824637616340, guid: 39dc8cbdcb4303349a8d2fa4ba2aa072, type: 3}
       queen: {fileID: 919132149155446097, guid: 267ef92fa52fd8946b1fd05c6ede3bc5, type: 3}
       rook: {fileID: 919132149155446097, guid: bcbee1fd4e4cf1b49819703d99d51734, type: 3}
       bishop: {fileID: 919132149155446097, guid: 9d64d031a3dcf5c4eaf5b21849703969, type: 3}
       knight: {fileID: 919132149155446097, guid: a00f3bafaf92896469b110e2b833f959, type: 3}
       pawn: {fileID: 919132149155446097, guid: b1e9283eb31d1084bbab15fd1c2ef2a0, type: 3}
     blackPieces:
-      king: {fileID: 919132149155446097, guid: 7a3a7f6e0835fe045bd6737edfb36f37, type: 3}
+      king: {fileID: 3635523174796848706, guid: 1f2c93826f8f97e4dbfb91683d1e7dc3, type: 3}
       queen: {fileID: 919132149155446097, guid: b5bcc70a50710274ea497c33ab2d32c0, type: 3}
       rook: {fileID: 919132149155446097, guid: f1bd472207ebdf349a7fbb7c0b5e8313, type: 3}
       bishop: {fileID: 919132149155446097, guid: 0b58674d53d4f3943b512859e6366e31, type: 3}
@@ -380,6 +380,6 @@ MonoBehaviour:
       height: 78
     pauseMenuKey: 60
   editorSoloTest:
-    enabled: 1
+    enabled: 0
     playerTeam: 1
     startupTimeoutSeconds: 10

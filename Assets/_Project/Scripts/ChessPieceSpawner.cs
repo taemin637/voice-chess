@@ -278,7 +278,13 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
         if (configuration != null)
         {
-            SpawnConfiguredPosition(configuration);
+            // In Player Commander mode kings are controlled by players and must
+            // not exist as board pieces at runtime.  Still show them in edit-mode
+            // previews so the exact player avatar prefab, scale and material can
+            // be adjusted on the board before entering Play Mode.
+            SpawnConfiguredPosition(
+                configuration,
+                includePlayerCommanderKings: !Application.isPlaying);
             return;
         }
 
@@ -1677,15 +1683,23 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         }
     }
 
-    private void SpawnConfiguredPosition(GameModeConfiguration configuration)
+    private void SpawnConfiguredPosition(
+        GameModeConfiguration configuration,
+        bool includePlayerCommanderKings)
     {
         int index = 0;
 
         foreach (InitialPiecePlacement placement in configuration.InitialPlacements)
         {
+            bool isPlayerCommanderPreview =
+                includePlayerCommanderKings &&
+                configuration.Victory.UsesPlayerCommander &&
+                placement?.PieceType == ChessPieceType.King;
+
             if (placement == null ||
                 !placement.Enabled ||
-                !configuration.ShouldSpawnBoardPiece(placement) ||
+                (!configuration.ShouldSpawnBoardPiece(placement) &&
+                 !isPlayerCommanderPreview) ||
                 placement.PieceType == ChessPieceType.None ||
                 (placement.Team != PlayerTeam.White &&
                  placement.Team != PlayerTeam.Black))
@@ -1698,9 +1712,12 @@ public sealed class ChessPieceSpawner : MonoBehaviour
                 ? whiteRotationOffset
                 : blackRotationOffset;
             Vector2 boardPosition = placement.BoardPosition;
+            string roleName = isPlayerCommanderPreview
+                ? "PlayerKingPreview"
+                : placement.PieceType.ToString();
             SpawnPiece(
                 prefab,
-                $"{placement.Team}_{placement.PieceType}_{index++:00}_" +
+                $"{placement.Team}_{roleName}_{index++:00}_" +
                 $"({boardPosition.x:F1},{boardPosition.y:F1})",
                 boardPosition.x,
                 boardPosition.y,
