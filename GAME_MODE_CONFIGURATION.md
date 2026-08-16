@@ -35,7 +35,7 @@
 - 목표 점수 즉시 승리: 주기 점수 방식에서 **Victory > End At Capture Score**와 목표 점수를 켜면 시간 종료 전에도 게임이 끝난다. 최종 점유 가치 방식은 종료 순간 합산 규칙이므로 이 옵션을 사용하지 않는다.
 - 신버전 랜덤 라운드 점령전:
   - 서버가 보드 전체의 독립적인 균등 난수 위치에 미리보기 원을 만들고 **Random Round Duration Seconds**(기본 5초)가 끝나는 순간 판정한다. 기본값은 가장자리와 코너까지 모두 후보이며, **Random Keep Entire Circle Inside Board**를 켜면 원 전체가 판 안에 들어오도록 반지름만큼 가장자리를 제외한다.
-  - 원 안의 기물 수가 더 많은 팀이 1점을 얻는다. 수가 같으면 각 팀 기물의 중심까지 거리 합이 더 작은 팀이 이기며, 양 팀 모두 0기물이거나 거리 차가 **Random Distance Tie Tolerance In Squares** 이하면 무득점이다.
+  - 원 안의 기물 수가 더 많은 팀이 1점을 얻는다. `Player Commander` 킹도 살아 있는 동안 하나의 기물로 함께 센다. 수가 같으면 각 팀 기물의 중심까지 거리 합이 더 작은 팀이 이기며, 양 팀 모두 0기물이거나 거리 차가 **Random Distance Tie Tolerance In Squares** 이하면 무득점이다.
   - **Random Round Score To Win**(기본 3점)에 먼저 도달하면 `Victory > End At Capture Score` 스위치와 관계없이 즉시 승리한다. **Random Round Interval Seconds**에서 판정 후 다음 원이 나타날 때까지의 간격을 정한다.
   - **Random Radius Minimum/Maximum In Squares**로 매 라운드 원의 크기 범위를 정한다. 두 값을 같게 두면 크기는 고정되고 위치만 무작위가 된다. **Random Minimum Centre Distance In Squares**는 기본 0으로, 매 위치가 서로 독립적인 진짜 균등 랜덤이다. 값을 올리면 직전 원 근처를 피하지만 큰 값에서는 두 구역을 오가는 느낌이 생길 수 있다.
   - 미리보기 원은 옅은 전체 테두리 위에 진한 테두리가 0%에서 100%까지 시계 방향으로 차오른다. 채움/옅은 선/진한 선 색, 원 분할 수, 선 굵기, 보드 위 높이, 시작 각도를 모두 **신버전 - 미리보기 원 표시**에서 조절한다.

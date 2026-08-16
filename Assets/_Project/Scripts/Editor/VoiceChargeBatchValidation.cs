@@ -231,6 +231,30 @@ public static class VoiceChargeBatchValidation
             throw new InvalidOperationException(
                 "빈 점령 원은 무득점이어야 합니다.");
         }
+
+        pieces.Add(new NetworkChessPieceState(
+            4,
+            PlayerTeam.White,
+            ChessPieceType.King,
+            0.25f,
+            0f));
+        PlayerTeam kingWinner = NetworkChessGame.EvaluateRandomCaptureRound(
+            pieces,
+            Vector2.zero,
+            1f,
+            0.001f,
+            out whiteCount,
+            out blackCount,
+            out _,
+            out _);
+
+        if (kingWinner != PlayerTeam.White ||
+            whiteCount != 1 ||
+            blackCount != 0)
+        {
+            throw new InvalidOperationException(
+                "랜덤 점령전에서 킹이 하나의 기물로 판정되지 않습니다.");
+        }
     }
 
     private static void SetPrivateField(

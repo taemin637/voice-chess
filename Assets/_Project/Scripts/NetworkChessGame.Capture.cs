@@ -538,6 +538,8 @@ public sealed partial class NetworkChessGame
             _randomCapturePieces.Add(_pieces[pieceIndex]);
         }
 
+        AppendPlayerCommanderKings(_randomCapturePieces);
+
         PlayerTeam leadingTeam = EvaluateRandomCaptureRound(
             _randomCapturePieces,
             RandomCaptureZoneBoardPosition,
@@ -581,6 +583,37 @@ public sealed partial class NetworkChessGame
             gameMode.CaptureMode.RandomRoundIntervalSeconds;
     }
 
+    private void AppendPlayerCommanderKings(
+        List<NetworkChessPieceState> capturePieces)
+    {
+        if (capturePieces == null ||
+            gameMode == null ||
+            !gameMode.Victory.UsesPlayerCommander)
+        {
+            return;
+        }
+
+        foreach (NetworkPlayer player in NetworkPlayer.Players)
+        {
+            if (player == null ||
+                !player.IsSpawned ||
+                player.IsEliminated ||
+                (player.Team != PlayerTeam.White &&
+                 player.Team != PlayerTeam.Black))
+            {
+                continue;
+            }
+
+            Vector3 pose = player.AvatarBoardPose;
+            capturePieces.Add(new NetworkChessPieceState(
+                0,
+                player.Team,
+                ChessPieceType.King,
+                pose.x,
+                pose.z));
+        }
+    }
+
     private void StartRandomCaptureRound()
     {
         if (NetworkManager == null || !IsCaptureModeEnabled)
@@ -590,7 +623,11 @@ public sealed partial class NetworkChessGame
 
         CaptureModeSettings settings = gameMode.CaptureMode;
         float radius = SelectRandomCaptureRadius(settings);
-        Vector2 centre = SelectRandomCaptureCentre(settings, radius);
+        bool isFirstRound = _randomCaptureRoundNumber.Value == 0u;
+        Vector2 centre = SelectRandomCaptureCentre(
+            settings,
+            radius,
+            isFirstRound);
         double now = NetworkManager.ServerTime.Time;
 
         _previousRandomCaptureCentre = centre;
@@ -625,7 +662,8 @@ public sealed partial class NetworkChessGame
 
     private Vector2 SelectRandomCaptureCentre(
         CaptureModeSettings settings,
-        float radius)
+        float radius,
+        bool isFirstRound)
     {
         GetRandomCaptureBoardBounds(out float boardMinimum, out float boardMaximum);
         float edgeClearance = settings.RandomPositionPaddingInSquares +
@@ -640,9 +678,12 @@ public sealed partial class NetworkChessGame
             maximum = middle;
         }
 
+        float centreRank = isFirstRound
+            ? (boardMinimum + boardMaximum) * 0.5f
+            : Mathf.Lerp(minimum, maximum, NextRandomFloat());
         Vector2 candidate = new(
             Mathf.Lerp(minimum, maximum, NextRandomFloat()),
-            Mathf.Lerp(minimum, maximum, NextRandomFloat()));
+            centreRank);
         float minimumDistance = settings.RandomMinimumCentreDistanceInSquares;
 
         if (!_hasPreviousRandomCaptureCentre || minimumDistance <= 0f)
