@@ -27,7 +27,8 @@ MonoBehaviour:
     freezeInactiveTeamMovement: 0
     turnDurationSeconds: 0
     commandRestrictionMode: 2
-    commandCooldownSeconds: 1
+    commandCooldownSeconds: 3
+    commandCooldownSelectionLeadTimeSeconds: 0.2
     commandCooldownReticleDiameterPixels: 72
     pieceMovementCooldownEnabled: 1
     pieceMovementCooldownSeconds: 4
@@ -426,6 +427,6 @@ MonoBehaviour:
       height: 78
     pauseMenuKey: 60
   editorSoloTest:
-    enabled: 0
+    enabled: 1
     playerTeam: 1
     startupTimeoutSeconds: 10

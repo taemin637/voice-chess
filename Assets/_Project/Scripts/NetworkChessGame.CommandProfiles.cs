@@ -240,6 +240,26 @@ public sealed partial class NetworkChessGame
             return false;
         }
 
+        CommandEconomySettings economy = gameMode?.Commands;
+
+        if (economy != null &&
+            economy.CooldownSystemEnabled &&
+            TryGetLocalPlayer(out NetworkPlayer localPlayer))
+        {
+            float commandCooldownRemaining =
+                localPlayer.RemainingCommandCooldown;
+            float selectionLeadTime =
+                economy.CommandCooldownSelectionLeadTimeSeconds;
+
+            if (commandCooldownRemaining > selectionLeadTime + 0.0001f)
+            {
+                rejection =
+                    $"명령 쿨타임 중에는 기물을 선택할 수 없습니다. " +
+                    $"{commandCooldownRemaining:F1}초 남았습니다.";
+                return false;
+            }
+        }
+
         if (!IsPieceMovementCooldownEnabled)
         {
             _localPredictedMovementCooldownEnds.Remove(piece.Id);

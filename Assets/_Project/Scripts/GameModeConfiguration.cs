@@ -370,6 +370,10 @@ public sealed class CommandEconomySettings
         CommandRestrictionMode.Cost;
     [Tooltip("쿨타임 방식에서 명령 성공 후 다음 명령까지 기다리는 시간입니다.")]
     [SerializeField, Min(0.01f)] private float commandCooldownSeconds = 2f;
+    [Tooltip("남은 명령 쿨타임이 이 시간 이하일 때 다음 기물을 미리 선택할 수 있습니다. 0이면 쿨타임이 완전히 끝난 뒤에만 선택할 수 있습니다.")]
+    [InspectorName("쿨타임 종료 전 선택 허용 시간 (초)")]
+    [SerializeField, Min(0f)]
+    private float commandCooldownSelectionLeadTimeSeconds = 0.5f;
     [Tooltip("중앙 조준점에 표시되는 원형 쿨타임 게이지의 지름입니다. 화면 픽셀 단위입니다.")]
     [SerializeField, Min(16f)]
     private float commandCooldownReticleDiameterPixels = 72f;
@@ -492,6 +496,8 @@ public sealed class CommandEconomySettings
     public bool CooldownSystemEnabled =>
         RestrictionMode == CommandRestrictionMode.Cooldown;
     public float CommandCooldownSeconds => Mathf.Max(0.01f, commandCooldownSeconds);
+    public float CommandCooldownSelectionLeadTimeSeconds =>
+        Mathf.Max(0f, commandCooldownSelectionLeadTimeSeconds);
     public float CommandCooldownReticleDiameterPixels =>
         Mathf.Max(16f, commandCooldownReticleDiameterPixels);
     public bool PieceMovementCooldownEnabled => pieceMovementCooldownEnabled;
@@ -703,6 +709,9 @@ public sealed class CommandEconomySettings
 
         turnDurationSeconds = Mathf.Max(0f, turnDurationSeconds);
         commandCooldownSeconds = Mathf.Max(0.01f, commandCooldownSeconds);
+        commandCooldownSelectionLeadTimeSeconds = Mathf.Max(
+            0f,
+            commandCooldownSelectionLeadTimeSeconds);
         commandCooldownReticleDiameterPixels = Mathf.Max(
             16f,
             commandCooldownReticleDiameterPixels);
