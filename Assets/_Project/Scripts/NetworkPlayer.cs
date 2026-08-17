@@ -10,8 +10,71 @@ public enum PlayerTeam
     Black
 }
 
+public struct NetworkChargePreviewState :
+    INetworkSerializable,
+    IEquatable<NetworkChargePreviewState>
+{
+    public bool Active;
+    public Vector2 AimBoardPosition;
+    public float ChargePower;
+    public ushort FirstPieceId;
+    public ushort SecondPieceId;
+    public ushort ThirdPieceId;
+    public byte PieceCount;
+
+    public NetworkChargePreviewState(
+        Vector2 aimBoardPosition,
+        float chargePower,
+        IReadOnlyList<ushort> pieceIds)
+    {
+        Active = pieceIds != null && pieceIds.Count > 0;
+        AimBoardPosition = aimBoardPosition;
+        ChargePower = Mathf.Clamp01(chargePower);
+        PieceCount = (byte)Mathf.Clamp(pieceIds?.Count ?? 0, 0, 3);
+        FirstPieceId = PieceCount > 0 ? pieceIds[0] : (ushort)0;
+        SecondPieceId = PieceCount > 1 ? pieceIds[1] : (ushort)0;
+        ThirdPieceId = PieceCount > 2 ? pieceIds[2] : (ushort)0;
+    }
+
+    public ushort GetPieceId(int index)
+    {
+        return index switch
+        {
+            0 => FirstPieceId,
+            1 => SecondPieceId,
+            2 => ThirdPieceId,
+            _ => 0
+        };
+    }
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer)
+        where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref Active);
+        serializer.SerializeValue(ref AimBoardPosition);
+        serializer.SerializeValue(ref ChargePower);
+        serializer.SerializeValue(ref FirstPieceId);
+        serializer.SerializeValue(ref SecondPieceId);
+        serializer.SerializeValue(ref ThirdPieceId);
+        serializer.SerializeValue(ref PieceCount);
+    }
+
+    public bool Equals(NetworkChargePreviewState other)
+    {
+        return Active == other.Active &&
+            AimBoardPosition == other.AimBoardPosition &&
+            Mathf.Approximately(ChargePower, other.ChargePower) &&
+            FirstPieceId == other.FirstPieceId &&
+            SecondPieceId == other.SecondPieceId &&
+            ThirdPieceId == other.ThirdPieceId &&
+            PieceCount == other.PieceCount;
+    }
+}
+
 public sealed class NetworkPlayer : NetworkBehaviour
 {
+    private const float ChargePreviewUpdatesPerSecond = 20f;
+
     [Header("게임 모드 미지정 시 구버전 대체 설정")]
     [SerializeField, HideInInspector, Min(1)] private int maximumPlayersPerTeam = 2;
     [SerializeField, HideInInspector, Range(1f, 60f)] private float avatarPoseUpdatesPerSecond = 20f;
@@ -59,6 +122,11 @@ public sealed class NetworkPlayer : NetworkBehaviour
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    private readonly NetworkVariable<NetworkChargePreviewState> _chargePreview = new(
+        default,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     private string _selectionStatus = "Choose a team.";
     private ChessPieceSpawner _pieceSpawner;
     private NetworkChessGame _chessGame;
@@ -75,6 +143,8 @@ public sealed class NetworkPlayer : NetworkBehaviour
     private bool _hasLocalAvatarPose;
     private bool _avatarTransformInitialized;
     private bool _serverAvatarRingOutStarted;
+    private NetworkChargePreviewState _lastSubmittedChargePreview;
+    private float _nextChargePreviewSendTime;
 
     public PlayerTeam Team => _team.Value;
     public bool IsEliminated => _isEliminated.Value;
@@ -99,6 +169,7 @@ public sealed class NetworkPlayer : NetworkBehaviour
     public string SelectionStatus => _selectionStatus;
     public bool IsOwnedByMe => IsOwner;
     public bool IsUsingKingAvatarModel => _avatarKingVisual != null;
+    public NetworkChargePreviewState ChargePreview => _chargePreview.Value;
     public string DisplayName => $"Player {OwnerClientId + 1:00}";
     public static IReadOnlyList<NetworkPlayer> Players => SpawnedPlayers;
 
@@ -132,6 +203,21 @@ public sealed class NetworkPlayer : NetworkBehaviour
 
             return null;
         }
+    }
+
+    public static bool IsTeamFriendlyToLocalPlayer(PlayerTeam team)
+    {
+        if (team == PlayerTeam.Unassigned)
+        {
+            return false;
+        }
+
+        NetworkPlayer localPlayer = LocalPlayer;
+        PlayerTeam localTeam = localPlayer != null &&
+            localPlayer.Team != PlayerTeam.Unassigned
+                ? localPlayer.Team
+                : PlayerTeam.White;
+        return team == localTeam;
     }
 
     public static bool TryGetByClientId(
@@ -321,6 +407,91 @@ public sealed class NetworkPlayer : NetworkBehaviour
 
         _nextAvatarPoseSendTime = Time.unscaledTime + ResolvePoseSendInterval();
         SubmitAvatarPoseRpc(_localAvatarBoardPose, _localAvatarYaw);
+    }
+
+    public void SetLocalChargePreview(
+        Vector2 aimBoardPosition,
+        float chargePower,
+        IReadOnlyList<ushort> pieceIds)
+    {
+        if (!IsSpawned || !IsOwner)
+        {
+            return;
+        }
+
+        NetworkChargePreviewState preview = new(
+            aimBoardPosition,
+            chargePower,
+            pieceIds);
+
+        if (!preview.Active)
+        {
+            ClearLocalChargePreview();
+            return;
+        }
+
+        bool activationChanged = !_lastSubmittedChargePreview.Active;
+
+        if (!activationChanged &&
+            Time.unscaledTime < _nextChargePreviewSendTime)
+        {
+            return;
+        }
+
+        if (preview.Equals(_lastSubmittedChargePreview))
+        {
+            return;
+        }
+
+        _lastSubmittedChargePreview = preview;
+        _nextChargePreviewSendTime = Time.unscaledTime +
+            1f / ChargePreviewUpdatesPerSecond;
+        SubmitChargePreviewRpc(preview);
+    }
+
+    public void ClearLocalChargePreview()
+    {
+        if (!IsSpawned || !IsOwner || !_lastSubmittedChargePreview.Active)
+        {
+            return;
+        }
+
+        _lastSubmittedChargePreview = default;
+        _nextChargePreviewSendTime = 0f;
+        SubmitChargePreviewRpc(default);
+    }
+
+    [Rpc(
+        SendTo.Server,
+        InvokePermission = RpcInvokePermission.Owner)]
+    private void SubmitChargePreviewRpc(NetworkChargePreviewState preview)
+    {
+        if (!preview.Active)
+        {
+            _chargePreview.Value = default;
+            return;
+        }
+
+        if (float.IsNaN(preview.AimBoardPosition.x) ||
+            float.IsInfinity(preview.AimBoardPosition.x) ||
+            float.IsNaN(preview.AimBoardPosition.y) ||
+            float.IsInfinity(preview.AimBoardPosition.y))
+        {
+            _chargePreview.Value = default;
+            return;
+        }
+
+        preview.AimBoardPosition.x = Mathf.Clamp(
+            preview.AimBoardPosition.x,
+            -100f,
+            100f);
+        preview.AimBoardPosition.y = Mathf.Clamp(
+            preview.AimBoardPosition.y,
+            -100f,
+            100f);
+        preview.ChargePower = Mathf.Clamp01(preview.ChargePower);
+        preview.PieceCount = (byte)Mathf.Clamp(preview.PieceCount, 1, 3);
+        _chargePreview.Value = preview;
     }
 
     [Rpc(

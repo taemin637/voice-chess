@@ -3,6 +3,12 @@ using UnityEngine;
 
 public sealed partial class NetworkChessGame
 {
+    private sealed class RemoteVoiceChargeVisual
+    {
+        public readonly List<GameObject> ArrowObjects = new();
+        public readonly List<LineRenderer> Arrows = new();
+    }
+
     private int _localHoveredPieceId = -1;
     private int _localConfirmedPieceId = -1;
     private readonly List<ushort> _localConfirmedPieceIds = new();
@@ -19,6 +25,9 @@ public sealed partial class NetworkChessGame
     private readonly List<GameObject> _localVoiceChargeArrowObjects = new();
     private readonly List<LineRenderer> _localVoiceChargeArrows = new();
     private Material _localVoiceChargeArrowMaterial;
+    private readonly Dictionary<ulong, RemoteVoiceChargeVisual>
+        _remoteVoiceChargeVisuals = new();
+    private Material _remoteVoiceChargeArrowMaterial;
     private float _localVoiceChargePreviewCost;
     private float _localVoiceChargePreviewPower;
     private float _localVoiceChargePreviewDistance;
@@ -544,6 +553,7 @@ public sealed partial class NetworkChessGame
             pieceSpawner == null)
         {
             HideLocalVoiceChargeArrows();
+            NetworkPlayer.LocalPlayer?.ClearLocalChargePreview();
             return;
         }
 
@@ -551,7 +561,7 @@ public sealed partial class NetworkChessGame
             pieceSpawner.FileSpacing,
             pieceSpawner.RankSpacing);
         float height = settings.VoiceChargeArrowHeightInSquares * squareSize;
-        Color color = settings.VoiceChargeArrowColor;
+        Color color = settings.FriendlyVoiceChargeArrowColor;
         float width = settings.VoiceChargeArrowWidthInSquares * squareSize;
 
         int visibleArrowCount = 0;
@@ -592,9 +602,16 @@ public sealed partial class NetworkChessGame
 
         HideLocalVoiceChargeArrowsFrom(visibleArrowCount);
 
-        if (_localVoiceChargeArrowMaterial != null)
+        if (visibleArrowCount > 0)
         {
-            _localVoiceChargeArrowMaterial.color = color;
+            NetworkPlayer.LocalPlayer?.SetLocalChargePreview(
+                previewAimBoardPosition,
+                _localVoiceChargePreviewPower,
+                _localConfirmedPieceIds);
+        }
+        else
+        {
+            NetworkPlayer.LocalPlayer?.ClearLocalChargePreview();
         }
     }
 
@@ -604,6 +621,7 @@ public sealed partial class NetworkChessGame
         _localVoiceChargePreviewPower = 0f;
         _localVoiceChargePreviewDistance = 0f;
         HideLocalVoiceChargeArrows();
+        NetworkPlayer.LocalPlayer?.ClearLocalChargePreview();
     }
 
     private bool TryShowLocalVoiceChargeArrow(
@@ -617,7 +635,39 @@ public sealed partial class NetworkChessGame
         Color color,
         float headLengthRatio)
     {
-        if (chargeDistance <= 0f)
+        LineRenderer arrow = EnsureLocalVoiceChargeArrow(arrowIndex);
+
+        if (arrow == null ||
+            !TryConfigureVoiceChargeArrow(
+                arrow,
+                piece,
+                aimBoardPosition,
+                chargeDistance,
+                height,
+                squareSize,
+                width,
+                color,
+                headLengthRatio))
+        {
+            return false;
+        }
+
+        _localVoiceChargeArrowObjects[arrowIndex].SetActive(true);
+        return true;
+    }
+
+    private bool TryConfigureVoiceChargeArrow(
+        LineRenderer arrow,
+        NetworkChessPieceState piece,
+        Vector2 aimBoardPosition,
+        float chargeDistance,
+        float height,
+        float squareSize,
+        float width,
+        Color color,
+        float headLengthRatio)
+    {
+        if (arrow == null || chargeDistance <= 0f)
         {
             return false;
         }
@@ -638,13 +688,6 @@ public sealed partial class NetworkChessGame
         Vector3 end = pieceSpawner.GetBoardWorldPosition(
             arrowEndBoard.x,
             arrowEndBoard.y) + pieceSpawner.BoardUp * height;
-        LineRenderer arrow = EnsureLocalVoiceChargeArrow(arrowIndex);
-
-        if (arrow == null)
-        {
-            return false;
-        }
-
         Vector3 forward = end - start;
         float worldLength = forward.magnitude;
         forward = worldLength > 0.0001f
@@ -673,8 +716,159 @@ public sealed partial class NetworkChessGame
         arrow.SetPosition(7, headBase + side * headWidth);
         arrow.SetPosition(8, end);
         arrow.SetPosition(9, headBase - side * headWidth);
-        _localVoiceChargeArrowObjects[arrowIndex].SetActive(true);
         return true;
+    }
+
+    private void UpdateRemoteVoiceChargePreviews()
+    {
+        foreach (RemoteVoiceChargeVisual visual in _remoteVoiceChargeVisuals.Values)
+        {
+            HideRemoteVoiceChargeArrowsFrom(visual, 0);
+        }
+
+        CommandEconomySettings settings = gameMode?.Commands;
+
+        if (settings == null || pieceSpawner == null)
+        {
+            return;
+        }
+
+        float squareSize = Mathf.Min(
+            pieceSpawner.FileSpacing,
+            pieceSpawner.RankSpacing);
+        float height = settings.VoiceChargeArrowHeightInSquares * squareSize;
+        float width = settings.VoiceChargeArrowWidthInSquares * squareSize;
+        foreach (NetworkPlayer player in NetworkPlayer.Players)
+        {
+            if (player == null ||
+                !player.IsSpawned ||
+                player.IsOwner ||
+                player.IsEliminated)
+            {
+                continue;
+            }
+
+            NetworkChargePreviewState preview = player.ChargePreview;
+
+            if (!preview.Active || preview.PieceCount == 0)
+            {
+                continue;
+            }
+
+            if (!_remoteVoiceChargeVisuals.TryGetValue(
+                    player.OwnerClientId,
+                    out RemoteVoiceChargeVisual visual))
+            {
+                visual = new RemoteVoiceChargeVisual();
+                _remoteVoiceChargeVisuals.Add(player.OwnerClientId, visual);
+            }
+
+            int visibleArrowCount = 0;
+            int pieceCount = Mathf.Clamp(preview.PieceCount, 0, 3);
+
+            for (int previewIndex = 0;
+                 previewIndex < pieceCount;
+                 previewIndex++)
+            {
+                int pieceIndex = FindPieceIndexById(
+                    preview.GetPieceId(previewIndex));
+
+                if (pieceIndex < 0)
+                {
+                    continue;
+                }
+
+                NetworkChessPieceState piece = _pieces[pieceIndex];
+
+                if (piece.OwnerTeam != player.Team)
+                {
+                    continue;
+                }
+
+                LineRenderer arrow = EnsureRemoteVoiceChargeArrow(
+                    visual,
+                    visibleArrowCount,
+                    player.OwnerClientId);
+                Color color = NetworkPlayer.IsTeamFriendlyToLocalPlayer(
+                    piece.OwnerTeam)
+                        ? settings.FriendlyVoiceChargeArrowColor
+                        : settings.EnemyVoiceChargeArrowColor;
+                float chargeDistance = GetVoiceChargeDistance(
+                    piece,
+                    preview.ChargePower);
+
+                if (!TryConfigureVoiceChargeArrow(
+                        arrow,
+                        piece,
+                        preview.AimBoardPosition,
+                        chargeDistance,
+                        height,
+                        squareSize,
+                        width,
+                        color,
+                        settings.VoiceChargeArrowHeadLengthRatio))
+                {
+                    continue;
+                }
+
+                visual.ArrowObjects[visibleArrowCount].SetActive(true);
+                visibleArrowCount++;
+            }
+        }
+    }
+
+    private LineRenderer EnsureRemoteVoiceChargeArrow(
+        RemoteVoiceChargeVisual visual,
+        int arrowIndex,
+        ulong ownerClientId)
+    {
+        if (_remoteVoiceChargeArrowMaterial == null)
+        {
+            Shader shader = Shader.Find("Sprites/Default");
+
+            if (shader != null)
+            {
+                _remoteVoiceChargeArrowMaterial = new Material(shader)
+                {
+                    color = Color.white
+                };
+            }
+        }
+
+        while (visual.Arrows.Count <= arrowIndex)
+        {
+            int number = visual.Arrows.Count + 1;
+            GameObject arrowObject = new(
+                $"Remote Voice Charge Arrow {ownerClientId}:{number}");
+            LineRenderer arrow = arrowObject.AddComponent<LineRenderer>();
+            arrow.useWorldSpace = true;
+            arrow.positionCount = 10;
+            arrow.shadowCastingMode =
+                UnityEngine.Rendering.ShadowCastingMode.Off;
+            arrow.receiveShadows = false;
+
+            if (_remoteVoiceChargeArrowMaterial != null)
+            {
+                arrow.sharedMaterial = _remoteVoiceChargeArrowMaterial;
+            }
+
+            visual.ArrowObjects.Add(arrowObject);
+            visual.Arrows.Add(arrow);
+        }
+
+        return visual.Arrows[arrowIndex];
+    }
+
+    private static void HideRemoteVoiceChargeArrowsFrom(
+        RemoteVoiceChargeVisual visual,
+        int firstIndex)
+    {
+        for (int index = firstIndex;
+             index < visual.ArrowObjects.Count;
+             index++)
+        {
+            visual.ArrowObjects[index].SetActive(false);
+        }
     }
 
     private LineRenderer EnsureLocalVoiceChargeArrow(int arrowIndex)
@@ -685,7 +879,10 @@ public sealed partial class NetworkChessGame
 
             if (shader != null)
             {
-                _localVoiceChargeArrowMaterial = new Material(shader);
+                _localVoiceChargeArrowMaterial = new Material(shader)
+                {
+                    color = Color.white
+                };
             }
         }
 
@@ -919,6 +1116,22 @@ public sealed partial class NetworkChessGame
         {
             Destroy(_localVoiceChargeArrowMaterial);
             _localVoiceChargeArrowMaterial = null;
+        }
+
+        foreach (RemoteVoiceChargeVisual visual in _remoteVoiceChargeVisuals.Values)
+        {
+            foreach (GameObject arrowObject in visual.ArrowObjects)
+            {
+                Destroy(arrowObject);
+            }
+        }
+
+        _remoteVoiceChargeVisuals.Clear();
+
+        if (_remoteVoiceChargeArrowMaterial != null)
+        {
+            Destroy(_remoteVoiceChargeArrowMaterial);
+            _remoteVoiceChargeArrowMaterial = null;
         }
 
         if (_localProximitySelectionRangeObject != null)

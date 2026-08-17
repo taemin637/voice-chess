@@ -457,6 +457,7 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
 
         UpdateKingDeathCinematic();
         UpdateLocalChargeLaserVisual();
+        UpdateRemoteVoiceChargePreviews();
         UpdateRandomCaptureZoneVisual();
     }
 

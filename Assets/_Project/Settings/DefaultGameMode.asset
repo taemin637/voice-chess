@@ -52,7 +52,8 @@ MonoBehaviour:
     voiceChargeArrowWidthInSquares: 0.055
     voiceChargeArrowHeightInSquares: 0.12
     voiceChargeArrowHeadLengthRatio: 0.2
-    voiceChargeArrowColor: {r: 1, g: 0.42, b: 0.05, a: 0.95}
+    voiceChargeArrowColor: {r: 0.1, g: 0.85, b: 1, a: 0.95}
+    remoteVoiceChargeArrowColor: {r: 1, g: 0.3, b: 0.15, a: 0.95}
     moveForwardCost: 1
     moveBackwardCost: 1
     moveLeftCost: 1
@@ -425,6 +426,6 @@ MonoBehaviour:
       height: 78
     pauseMenuKey: 60
   editorSoloTest:
-    enabled: 1
+    enabled: 0
     playerTeam: 1
     startupTimeoutSeconds: 10

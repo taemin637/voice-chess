@@ -60,6 +60,7 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         public float CurrentHeading;
         public float TargetHeading;
         public GameObject HeadingArrow;
+        public MeshRenderer HeadingArrowRenderer;
         public GameObject MovementCooldownVisual;
         public LineRenderer MovementCooldownBackground;
         public LineRenderer MovementCooldownArc;
@@ -136,7 +137,9 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         new(1f, 0.38f, 0.05f, 1f);
 
     [Header("기물 방향 화살표")]
+    [InspectorName("아군 방향 화살표 색")]
     [SerializeField] private Color whiteHeadingArrowColor = new(0.1f, 0.85f, 1f, 0.95f);
+    [InspectorName("적군 방향 화살표 색")]
     [SerializeField] private Color blackHeadingArrowColor = new(1f, 0.3f, 0.15f, 0.95f);
     [SerializeField, Range(0.3f, 1f)] private float headingArrowLengthInSquares = 0.72f;
     [SerializeField, Range(0.02f, 0.15f)] private float headingArrowWidthInSquares = 0.065f;
@@ -898,6 +901,9 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
         visual.SelectionColliders = EnsurePieceSelectionColliders(visual);
         visual.HeadingArrow = CreateHeadingArrow(visual);
+        visual.HeadingArrowRenderer = visual.HeadingArrow != null
+            ? visual.HeadingArrow.GetComponent<MeshRenderer>()
+            : null;
         visual.MovementCooldownVisual = CreateMovementCooldownVisual(
             out visual.MovementCooldownBackground,
             out visual.MovementCooldownArc);
@@ -1181,6 +1187,18 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         Vector3 centre = piecePosition +
             BoardUp * (squareSize * headingArrowHeightInSquares);
         Transform arrowTransform = visual.HeadingArrow.transform;
+        MeshRenderer arrowRenderer = visual.HeadingArrowRenderer;
+
+        if (arrowRenderer != null)
+        {
+            Material expectedMaterial = GetHeadingArrowMaterial(visual.Team);
+
+            if (arrowRenderer.sharedMaterial != expectedMaterial)
+            {
+                arrowRenderer.sharedMaterial = expectedMaterial;
+            }
+        }
+
         arrowTransform.SetPositionAndRotation(
             centre,
             Quaternion.LookRotation(direction, BoardUp));
@@ -1229,7 +1247,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
     private Material GetHeadingArrowMaterial(PlayerTeam team)
     {
-        Material material = team == PlayerTeam.White
+        bool isFriendly = NetworkPlayer.IsTeamFriendlyToLocalPlayer(team);
+        Material material = isFriendly
             ? whiteHeadingArrowMaterial
             : blackHeadingArrowMaterial;
 
@@ -1247,16 +1266,18 @@ public sealed class ChessPieceSpawner : MonoBehaviour
             return null;
         }
 
-        Color color = team == PlayerTeam.White
+        Color color = isFriendly
             ? whiteHeadingArrowColor
             : blackHeadingArrowColor;
         material = new Material(shader)
         {
-            name = $"{team} Heading Arrow Material",
+            name = isFriendly
+                ? "Friendly Heading Arrow Material"
+                : "Enemy Heading Arrow Material",
             color = color
         };
 
-        if (team == PlayerTeam.White)
+        if (isFriendly)
         {
             whiteHeadingArrowMaterial = material;
         }
@@ -1813,8 +1834,8 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         selectionMarkerSegments = settings.SelectionMarkerSegments;
         voiceHoverMarkerColor = settings.VoiceHoverMarkerColor;
         confirmedVoiceMarkerColor = settings.ConfirmedVoiceMarkerColor;
-        whiteHeadingArrowColor = settings.WhiteHeadingArrowColor;
-        blackHeadingArrowColor = settings.BlackHeadingArrowColor;
+        whiteHeadingArrowColor = settings.FriendlyHeadingArrowColor;
+        blackHeadingArrowColor = settings.EnemyHeadingArrowColor;
         headingArrowLengthInSquares = settings.HeadingArrowLengthInSquares;
         headingArrowWidthInSquares = settings.HeadingArrowWidthInSquares;
         headingArrowHeightInSquares = settings.HeadingArrowHeightInSquares;

@@ -427,8 +427,14 @@ public sealed class CommandEconomySettings
     [SerializeField, Min(0.002f)] private float voiceChargeArrowWidthInSquares = 0.055f;
     [SerializeField, Min(0.005f)] private float voiceChargeArrowHeightInSquares = 0.12f;
     [SerializeField, Range(0.05f, 0.8f)] private float voiceChargeArrowHeadLengthRatio = 0.2f;
+    [InspectorName("아군 차징 화살표 색")]
+    [Tooltip("현재 화면을 보는 플레이어와 같은 팀 기물의 차징 화살표 색입니다.")]
     [SerializeField] private Color voiceChargeArrowColor =
-        new(1f, 0.42f, 0.05f, 0.95f);
+        new(0.1f, 0.85f, 1f, 0.95f);
+    [InspectorName("적군 차징 화살표 색")]
+    [Tooltip("현재 화면을 보는 플레이어와 다른 팀 기물의 차징 화살표 색입니다.")]
+    [SerializeField] private Color remoteVoiceChargeArrowColor =
+        new(1f, 0.3f, 0.15f, 0.95f);
 
     [Header("명령별 코스트")]
     [FormerlySerializedAs("movementCommandCost")]
@@ -533,7 +539,8 @@ public sealed class CommandEconomySettings
         Mathf.Max(0.005f, voiceChargeArrowHeightInSquares);
     public float VoiceChargeArrowHeadLengthRatio =>
         Mathf.Clamp(voiceChargeArrowHeadLengthRatio, 0.05f, 0.8f);
-    public Color VoiceChargeArrowColor => voiceChargeArrowColor;
+    public Color FriendlyVoiceChargeArrowColor => voiceChargeArrowColor;
+    public Color EnemyVoiceChargeArrowColor => remoteVoiceChargeArrowColor;
     public float ChargeLaserRangeInSquares =>
         Mathf.Max(1f, chargeLaserRangeInSquares);
     public bool ShowChargeRaycastLaser => showChargeRaycastLaser;
@@ -1476,8 +1483,12 @@ public sealed class BoardPresentationSettings
         new(1f, 0.38f, 0.05f, 1f);
 
     [Header("기물 방향 안내선")]
+    [InspectorName("아군 방향 화살표 색")]
+    [Tooltip("현재 화면을 보는 플레이어와 같은 팀 기물의 방향 화살표 색입니다.")]
     [SerializeField] private Color whiteHeadingArrowColor =
         new(0.1f, 0.85f, 1f, 0.95f);
+    [InspectorName("적군 방향 화살표 색")]
+    [Tooltip("현재 화면을 보는 플레이어와 다른 팀 기물의 방향 화살표 색입니다.")]
     [SerializeField] private Color blackHeadingArrowColor =
         new(1f, 0.3f, 0.15f, 0.95f);
     [SerializeField, Range(0.3f, 1f)] private float headingArrowLengthInSquares = 0.72f;
@@ -1503,8 +1514,8 @@ public sealed class BoardPresentationSettings
     public int SelectionMarkerSegments => Mathf.Clamp(selectionMarkerSegments, 16, 96);
     public Color VoiceHoverMarkerColor => voiceHoverMarkerColor;
     public Color ConfirmedVoiceMarkerColor => confirmedVoiceMarkerColor;
-    public Color WhiteHeadingArrowColor => whiteHeadingArrowColor;
-    public Color BlackHeadingArrowColor => blackHeadingArrowColor;
+    public Color FriendlyHeadingArrowColor => whiteHeadingArrowColor;
+    public Color EnemyHeadingArrowColor => blackHeadingArrowColor;
     public float HeadingArrowLengthInSquares =>
         Mathf.Clamp(headingArrowLengthInSquares, 0.3f, 1f);
     public float HeadingArrowWidthInSquares =>
