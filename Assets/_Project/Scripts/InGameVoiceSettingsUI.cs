@@ -33,8 +33,9 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
 
     public static bool IsOpen => _instance != null && _instance._open;
     public static bool IsBlockingGameplay =>
-        _instance != null &&
-        (_instance._pauseMenuOpen || _instance._open);
+        (_instance != null &&
+         (_instance._pauseMenuOpen || _instance._open)) ||
+        AzureKoreanSpeechInput.IsCommandHistoryOpen;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
@@ -69,6 +70,14 @@ public sealed class InGameVoiceSettingsUI : MonoBehaviour
         }
 
         Keyboard keyboard = Keyboard.current;
+
+        if (keyboard != null &&
+            keyboard.escapeKey.wasPressedThisFrame &&
+            (AzureKoreanSpeechInput.IsCommandHistoryOpen ||
+             AzureKoreanSpeechInput.DidCloseCommandHistoryThisFrame))
+        {
+            return;
+        }
 
         Key pauseMenuKey = ResolveInterfaceSettings()?.PauseMenuKey ?? Key.Escape;
 

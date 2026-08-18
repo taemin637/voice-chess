@@ -1,6 +1,9 @@
 #if UNITY_EDITOR
 using System.Collections;
+using System.Net;
+using System.Net.Sockets;
 using Unity.Netcode;
+using Unity.Netcode.Transports.UTP;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
@@ -70,9 +73,27 @@ public sealed class EditorSoloPlayTester : MonoBehaviour
             yield break;
         }
 
-        if (!_networkManager.IsListening && !_networkManager.StartHost())
+        if (!_networkManager.IsListening)
         {
-            yield break;
+            if (!TryConfigureAvailableSoloPort(out ushort soloPort))
+            {
+                Debug.LogError(
+                    "[Editor Solo] 사용 가능한 로컬 UDP 포트를 준비하지 못했습니다.",
+                    this);
+                yield break;
+            }
+
+            if (!_networkManager.StartHost())
+            {
+                Debug.LogError(
+                    $"[Editor Solo] 로컬 호스트 시작에 실패했습니다 (UDP {soloPort}).",
+                    this);
+                yield break;
+            }
+
+            Debug.Log(
+                $"[Editor Solo] 로컬 호스트를 UDP {soloPort}에서 시작했습니다.",
+                this);
         }
 
         if (!_networkManager.IsHost)
@@ -122,6 +143,40 @@ public sealed class EditorSoloPlayTester : MonoBehaviour
         }
     }
 
+    private bool TryConfigureAvailableSoloPort(out ushort port)
+    {
+        port = 0;
+        UnityTransport transport = _networkManager.GetComponent<UnityTransport>();
+
+        if (transport == null)
+        {
+            Debug.LogError(
+                "[Editor Solo] NetworkManager에서 UnityTransport를 찾지 못했습니다.",
+                this);
+            return false;
+        }
+
+        try
+        {
+            using UdpClient portProbe = new(AddressFamily.InterNetwork);
+            portProbe.Client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            port = (ushort)((IPEndPoint)portProbe.Client.LocalEndPoint).Port;
+            transport.SetConnectionData(
+                forceOverrideCommandLineArgs: true,
+                ipv4Address: IPAddress.Loopback.ToString(),
+                port: port,
+                listenAddress: IPAddress.Loopback.ToString());
+            return true;
+        }
+        catch (SocketException exception)
+        {
+            Debug.LogError(
+                $"[Editor Solo] 로컬 UDP 포트 선택 실패: {exception.Message}",
+                this);
+            return false;
+        }
+    }
+
     private void Update()
     {
         Keyboard keyboard = Keyboard.current;
@@ -133,7 +188,7 @@ public sealed class EditorSoloPlayTester : MonoBehaviour
             return;
         }
 
-        if (keyboard.backquoteKey.wasPressedThisFrame)
+        if (keyboard.f10Key.wasPressedThisFrame)
         {
             _game.EditorForceFinishMatchAtTimeLimit();
             return;
@@ -155,6 +210,11 @@ public sealed class EditorSoloPlayTester : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (_networkManager != null && _networkManager.IsListening)
+        {
+            _networkManager.Shutdown();
+        }
+
         IsActive = false;
         DummyPlayerTeam = PlayerTeam.Unassigned;
     }

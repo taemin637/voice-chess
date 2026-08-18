@@ -60,6 +60,8 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private readonly List<LoudnessFrame> _preRollLoudnessFrames = new();
     private readonly List<float> _noiseCalibrationSamples = new();
     private readonly List<byte> _capturedSpeechPcm = new();
+    private readonly List<string> _whiteVoiceCommandHistory = new();
+    private readonly List<string> _blackVoiceCommandHistory = new();
     private readonly float[] _preRollSamples = new float[PreRollSampleCount];
 
     private AudioClip _microphoneClip;
@@ -115,10 +117,33 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
     private bool _currentRecognitionIsAutomatic;
     private bool _currentRecognitionExecutesCommand;
     private float _liveChargePronunciationScore;
+    private bool _debugOverlayVisible;
+    private string _liveTranscript = string.Empty;
+    private string _lastRecognizedCommand = "아직 인식된 명령이 없습니다.";
+    private bool _commandHistoryVisible;
+    private CursorLockMode _cursorLockModeBeforeCommandHistory;
+    private bool _cursorVisibleBeforeCommandHistory;
+    private int _whiteSuccessfulVoiceCommandCount;
+    private int _blackSuccessfulVoiceCommandCount;
+    private Vector2 _whiteHistoryScrollPosition;
+    private Vector2 _blackHistoryScrollPosition;
+    private GUIStyle _debugOverlayBoxStyle;
+    private GUIStyle _debugOverlayTextStyle;
+    private GUIStyle _historyTitleStyle;
+    private GUIStyle _historyHintStyle;
+    private GUIStyle _historyHeaderStyle;
+    private GUIStyle _historyEntryStyle;
+    private GUIStyle _historyEmptyStyle;
+    private int _debugOverlayFontSize;
 
     private static bool _buildCredentialsLoaded;
     private static string _buildSpeechKey = string.Empty;
     private static string _buildSpeechRegion = string.Empty;
+    private static int _commandHistoryClosedFrame = -1;
+
+    public static bool IsCommandHistoryOpen { get; private set; }
+    public static bool DidCloseCommandHistoryThisFrame =>
+        _commandHistoryClosedFrame == Time.frameCount;
 
     [Serializable]
     private sealed class BuildSpeechCredentials
@@ -454,6 +479,26 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
         Keyboard keyboard = Keyboard.current;
 
+        if (keyboard != null && keyboard.backquoteKey.wasPressedThisFrame)
+        {
+            _debugOverlayVisible = !_debugOverlayVisible;
+        }
+
+        bool enterPressed = keyboard != null &&
+            (keyboard.enterKey.wasPressedThisFrame ||
+             keyboard.numpadEnterKey.wasPressedThisFrame);
+        bool escapePressed = keyboard != null &&
+            keyboard.escapeKey.wasPressedThisFrame;
+
+        if (_commandHistoryVisible && (enterPressed || escapePressed))
+        {
+            CloseCommandHistory();
+        }
+        else if (enterPressed && !InGameVoiceSettingsUI.IsBlockingGameplay)
+        {
+            OpenCommandHistory();
+        }
+
         if (_inputMode == VoiceInputMode.PushToTalk &&
             keyboard != null &&
             NetworkPlayer.MatchStarted &&
@@ -473,6 +518,274 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                 FinishSpeechInput();
             }
         }
+    }
+
+    private void OpenCommandHistory()
+    {
+        if (_commandHistoryVisible)
+        {
+            return;
+        }
+
+        _cursorLockModeBeforeCommandHistory = Cursor.lockState;
+        _cursorVisibleBeforeCommandHistory = Cursor.visible;
+        _commandHistoryVisible = true;
+        IsCommandHistoryOpen = true;
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    private void CloseCommandHistory()
+    {
+        if (!_commandHistoryVisible)
+        {
+            return;
+        }
+
+        _commandHistoryVisible = false;
+        IsCommandHistoryOpen = false;
+        _commandHistoryClosedFrame = Time.frameCount;
+        Cursor.lockState = _cursorLockModeBeforeCommandHistory;
+        Cursor.visible = _cursorVisibleBeforeCommandHistory;
+    }
+
+    private void OnGUI()
+    {
+        if (!_debugOverlayVisible && !_commandHistoryVisible)
+        {
+            return;
+        }
+
+        float scale = Mathf.Clamp(Screen.height / 900f, 0.8f, 2f);
+        int fontSize = Mathf.RoundToInt(17f * scale);
+        EnsureDebugOverlayStyles(fontSize);
+
+        int previousDepth = GUI.depth;
+        GUI.depth = -2000;
+
+        if (_commandHistoryVisible)
+        {
+            DrawCommandHistoryWindow(scale);
+        }
+
+        if (_debugOverlayVisible)
+        {
+            DrawRecognitionDebugOverlay(scale);
+        }
+
+        GUI.depth = previousDepth;
+    }
+
+    private void DrawRecognitionDebugOverlay(float scale)
+    {
+
+        const float baseMargin = 16f;
+        const float basePanelWidth = 720f;
+        const float baseLineHeight = 26f;
+        const float baseHorizontalPadding = 12f;
+        const float baseVerticalPadding = 8f;
+        float margin = baseMargin * scale;
+        float lineHeight = baseLineHeight * scale;
+        float horizontalPadding = baseHorizontalPadding * scale;
+        float verticalPadding = baseVerticalPadding * scale;
+        float availableWidth = Mathf.Max(1f, Screen.width - margin * 2f);
+        float panelWidth = Mathf.Min(basePanelWidth * scale, availableWidth);
+        float panelHeight = verticalPadding * 2f + lineHeight * 2f;
+        Rect panelRect = new(
+            Screen.width - margin - panelWidth,
+            Screen.height - margin - panelHeight,
+            panelWidth,
+            panelHeight);
+
+        GUI.Box(panelRect, GUIContent.none, _debugOverlayBoxStyle);
+
+        string liveText = _isCapturingSpeech &&
+                          !string.IsNullOrWhiteSpace(_liveTranscript)
+            ? $"“{_liveTranscript}”"
+            : _status;
+        Rect liveRect = new(
+            panelRect.x + horizontalPadding,
+            panelRect.y + verticalPadding,
+            panelRect.width - horizontalPadding * 2f,
+            lineHeight);
+        Rect commandRect = new(
+            liveRect.x,
+            liveRect.y + lineHeight,
+            liveRect.width,
+            lineHeight);
+        GUI.Label(liveRect, $"실시간 인식: {liveText}", _debugOverlayTextStyle);
+        GUI.Label(
+            commandRect,
+            $"최근 명령 인식: {_lastRecognizedCommand}",
+            _debugOverlayTextStyle);
+    }
+
+    private void DrawCommandHistoryWindow(float scale)
+    {
+        float margin = 28f * scale;
+        float availableWidth = Mathf.Max(1f, Screen.width - margin * 2f);
+        float availableHeight = Mathf.Max(1f, Screen.height - margin * 2f);
+        float panelWidth = Mathf.Min(1180f * scale, availableWidth);
+        float panelHeight = Mathf.Min(720f * scale, availableHeight);
+        Rect panelRect = new(
+            (Screen.width - panelWidth) * 0.5f,
+            (Screen.height - panelHeight) * 0.5f,
+            panelWidth,
+            panelHeight);
+        GUI.Box(panelRect, GUIContent.none, _debugOverlayBoxStyle);
+
+        float padding = 18f * scale;
+        float titleHeight = 42f * scale;
+        float hintHeight = 26f * scale;
+        GUI.Label(
+            new Rect(
+                panelRect.x + padding,
+                panelRect.y + padding,
+                panelRect.width - padding * 2f,
+                titleHeight),
+            "음성 명령 기록",
+            _historyTitleStyle);
+        GUI.Label(
+            new Rect(
+                panelRect.x + padding,
+                panelRect.y + padding + titleHeight,
+                panelRect.width - padding * 2f,
+                hintHeight),
+            "기물이 선택된 상태에서 시도한 명령만 표시됩니다. Enter / Esc: 닫기",
+            _historyHintStyle);
+
+        float columnsY = panelRect.y + padding + titleHeight + hintHeight + 10f * scale;
+        float columnsHeight = panelRect.yMax - padding - columnsY;
+        float columnGap = 12f * scale;
+        float columnWidth = (panelRect.width - padding * 2f - columnGap) * 0.5f;
+        Rect whiteColumn = new(
+            panelRect.x + padding,
+            columnsY,
+            columnWidth,
+            columnsHeight);
+        Rect blackColumn = new(
+            whiteColumn.xMax + columnGap,
+            columnsY,
+            columnWidth,
+            columnsHeight);
+
+        DrawCommandHistoryColumn(
+            whiteColumn,
+            "백 (WHITE)",
+            _whiteVoiceCommandHistory,
+            _whiteSuccessfulVoiceCommandCount,
+            ref _whiteHistoryScrollPosition,
+            scale);
+        DrawCommandHistoryColumn(
+            blackColumn,
+            "흑 (BLACK)",
+            _blackVoiceCommandHistory,
+            _blackSuccessfulVoiceCommandCount,
+            ref _blackHistoryScrollPosition,
+            scale);
+    }
+
+    private void DrawCommandHistoryColumn(
+        Rect columnRect,
+        string title,
+        IReadOnlyList<string> history,
+        int successfulCount,
+        ref Vector2 scrollPosition,
+        float scale)
+    {
+        GUI.Box(columnRect, GUIContent.none, _debugOverlayBoxStyle);
+        float padding = 12f * scale;
+        float headerHeight = 34f * scale;
+        int recognitionRate = history.Count == 0
+            ? 0
+            : Mathf.RoundToInt(successfulCount * 100f / history.Count);
+        string header =
+            $"{title} · {history.Count}개 · 음성 인식률: {recognitionRate}% " +
+            $"({successfulCount}/{history.Count})";
+        GUI.Label(
+            new Rect(
+                columnRect.x + padding,
+                columnRect.y + padding,
+                columnRect.width - padding * 2f,
+                headerHeight),
+            header,
+            _historyHeaderStyle);
+
+        Rect contentRect = new(
+            columnRect.x + padding,
+            columnRect.y + padding + headerHeight,
+            columnRect.width - padding * 2f,
+            columnRect.height - padding * 2f - headerHeight);
+        GUILayout.BeginArea(contentRect);
+        scrollPosition = GUILayout.BeginScrollView(scrollPosition);
+
+        if (history.Count == 0)
+        {
+            GUILayout.Label("아직 시도된 음성 명령이 없습니다.", _historyEmptyStyle);
+        }
+        else
+        {
+            for (int index = 0; index < history.Count; index++)
+            {
+                int sequence = history.Count - index;
+                GUILayout.Label(
+                    $"{sequence}. {history[index]}",
+                    _historyEntryStyle);
+                GUILayout.Space(5f * scale);
+            }
+        }
+
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+    }
+
+    private void EnsureDebugOverlayStyles(int fontSize)
+    {
+        if (_debugOverlayTextStyle != null && _debugOverlayFontSize == fontSize)
+        {
+            return;
+        }
+
+        _debugOverlayFontSize = fontSize;
+        _debugOverlayBoxStyle = new GUIStyle(GUI.skin.box);
+        _debugOverlayTextStyle = new GUIStyle(GUI.skin.label)
+        {
+            alignment = TextAnchor.MiddleLeft,
+            clipping = TextClipping.Clip,
+            fontSize = fontSize,
+            fontStyle = FontStyle.Bold,
+            wordWrap = false
+        };
+        _debugOverlayTextStyle.normal.textColor = Color.white;
+        _historyTitleStyle = new GUIStyle(_debugOverlayTextStyle)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontSize = Mathf.RoundToInt(fontSize * 1.55f)
+        };
+        _historyHintStyle = new GUIStyle(_debugOverlayTextStyle)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontSize = Mathf.Max(12, Mathf.RoundToInt(fontSize * 0.82f)),
+            fontStyle = FontStyle.Normal
+        };
+        _historyHintStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f);
+        _historyHeaderStyle = new GUIStyle(_debugOverlayTextStyle)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontSize = Mathf.RoundToInt(fontSize * 1.1f)
+        };
+        _historyEntryStyle = new GUIStyle(_debugOverlayTextStyle)
+        {
+            alignment = TextAnchor.UpperLeft,
+            fontStyle = FontStyle.Normal,
+            wordWrap = true,
+            clipping = TextClipping.Overflow
+        };
+        _historyEmptyStyle = new GUIStyle(_historyEntryStyle)
+        {
+            alignment = TextAnchor.MiddleCenter
+        };
+        _historyEmptyStyle.normal.textColor = new Color(0.65f, 0.65f, 0.65f);
     }
 
     public void RequestRecognitionTest()
@@ -680,6 +993,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         _currentRecognitionIsAutomatic = includePreRoll;
         _currentRecognitionExecutesCommand = executeCommand;
         _liveChargePronunciationScore = 0f;
+        _liveTranscript = string.Empty;
 
         while (_partialTranscripts.TryDequeue(out _))
         {
@@ -957,6 +1271,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
             _liveChargePronunciationScore =
                 KoreanVoiceCommandParser.GetChargePronunciationScore(partialText);
+            _liveTranscript = partialText.Trim();
         }
 
         if (_isCapturingSpeech)
@@ -1051,6 +1366,11 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         _lastCommandLoudnessDecibels = outcome.CommandLoudnessDecibels;
         _lastCommandReachInSquares = outcome.CommandReachInSquares;
 
+        if (outcome.ExecuteCommand)
+        {
+            _lastRecognizedCommand = BuildDebugCommandSummary(outcome);
+        }
+
         if (outcome.ExecuteCommand && !_isCapturingSpeech)
         {
             _game?.ShowLocalVoiceCommandTarget(
@@ -1069,6 +1389,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             {
                 _game?.ShowLocalVoiceFailure(
                     outcome.HasVoiceTarget ? outcome.VoiceTargetPieceId : null);
+                RecordVoiceCommandAttempt(outcome, false, outcome.Error);
             }
 
             return;
@@ -1104,6 +1425,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                 : _game != null && _game.UsesChargeSelectionCommand
                 ? $"{GetConfirmSelectionButtonName()}으로 확정 선택한 아군 말이 없습니다."
                 : "명령을 말하기 시작할 때 바라본 아군 말이 없었습니다.";
+            RecordVoiceCommandAttempt(outcome, false, _status);
             return;
         }
 
@@ -1165,6 +1487,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                 _status = string.IsNullOrWhiteSpace(rejection)
                     ? "명령을 실행할 수 없습니다."
                     : rejection;
+                RecordVoiceCommandAttempt(outcome, false, _status);
                 return;
             }
         }
@@ -1189,6 +1512,81 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
             : $"“{outcome.Text}” → {commandName} ({outcome.Confidence:P0}) · " +
               $"음량 {outcome.CommandLoudnessDecibels:F1} dBFS / " +
               $"전달 {outcome.CommandReachInSquares:F1}칸";
+        RecordVoiceCommandAttempt(outcome, true, string.Empty);
+    }
+
+    private static string BuildDebugCommandSummary(RecognitionOutcome outcome)
+    {
+        string transcript = string.IsNullOrWhiteSpace(outcome.Text)
+            ? "(인식 텍스트 없음)"
+            : $"“{outcome.Text.Trim()}”";
+
+        if (!outcome.Accepted)
+        {
+            return $"{transcript} → 미인식 ({outcome.Error})";
+        }
+
+        string commandName = string.Join(
+            " + ",
+            outcome.Commands.Select(KoreanVoiceCommand.GetDisplayName));
+        string target = outcome.HasVoiceTarget
+            ? $"기물 #{outcome.VoiceTargetPieceId}"
+            : "기물 미선택";
+        return $"{target} · {transcript} → {commandName} ({outcome.Confidence:P0})";
+    }
+
+    private void RecordVoiceCommandAttempt(
+        RecognitionOutcome outcome,
+        bool successful,
+        string failureReason)
+    {
+        if (!outcome.HasVoiceTarget)
+        {
+            return;
+        }
+
+        PlayerTeam team = NetworkPlayer.LocalPlayer?.Team ?? PlayerTeam.Unassigned;
+
+        if (team != PlayerTeam.White && team != PlayerTeam.Black)
+        {
+            return;
+        }
+
+        string transcript = string.IsNullOrWhiteSpace(outcome.Text)
+            ? "(인식 텍스트 없음)"
+            : $"“{outcome.Text.Trim()}”";
+        string commandName = outcome.Accepted
+            ? string.Join(
+                " + ",
+                outcome.Commands.Select(KoreanVoiceCommand.GetDisplayName))
+            : "미인식";
+        string target = $"기물 #{outcome.VoiceTargetPieceId}";
+        string result = successful
+            ? "성공"
+            : string.IsNullOrWhiteSpace(failureReason)
+                ? "실패"
+                : $"실패: {failureReason}";
+        string entry =
+            $"{DateTime.Now:HH:mm:ss} · {result} · {target} · " +
+            $"{transcript} → {commandName}";
+        List<string> history = team == PlayerTeam.White
+            ? _whiteVoiceCommandHistory
+            : _blackVoiceCommandHistory;
+        history.Insert(0, entry);
+
+        if (!successful)
+        {
+            return;
+        }
+
+        if (team == PlayerTeam.White)
+        {
+            _whiteSuccessfulVoiceCommandCount++;
+        }
+        else
+        {
+            _blackSuccessfulVoiceCommandCount++;
+        }
     }
 
     private void RefreshMicrophoneDevices(bool restartCapture)
@@ -2086,6 +2484,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
     private void OnDestroy()
     {
+        CloseCommandHistory();
         _isDestroyed = true;
         _game?.ClearLocalVoiceChargePreview();
         StopMicrophoneCapture();
