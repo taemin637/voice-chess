@@ -1866,29 +1866,12 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
                 piece.OwnerTeam,
                 direction.normalized);
 
-            if (gameMode != null && gameMode.Commands.UsesVoiceChargeScaling)
-            {
-                float chargePower = gameMode.Commands.GetVoiceChargePower(
-                    voicedDurationSeconds,
-                    commandLoudness,
-                    pronunciationScore);
-                float chargeDistance = GetVoiceChargeDistance(
-                    piece,
-                    chargePower);
-                ApplyVoiceChargedMovement(
-                    ref piece,
-                    pieceSettings,
-                    chargePower,
-                    chargeDistance);
-            }
-            else
-            {
-                ApplyMovementCommand(
-                    ref piece,
-                    pieceSettings,
-                    0f,
-                    commandLoudness);
-            }
+            // Every selected piece travels directly to the shared aim point.
+            ApplyVoiceChargedMovement(
+                ref piece,
+                pieceSettings,
+                chargePower: 1f,
+                chargeDistance: direction.magnitude);
 
             StartPieceMovementCooldown(ref piece);
 
@@ -1990,29 +1973,11 @@ public sealed partial class NetworkChessGame : NetworkBehaviour
             piece.VoiceHeading = GetVoiceHeadingForDirection(
                 piece.OwnerTeam,
                 direction.normalized);
-            if (gameMode != null && gameMode.Commands.UsesVoiceChargeScaling)
-            {
-                float chargePower = gameMode.Commands.GetVoiceChargePower(
-                    voicedDurationSeconds,
-                    commandLoudness,
-                    pronunciationScore);
-                float chargeDistance = GetVoiceChargeDistance(
-                    piece,
-                    chargePower);
-                ApplyVoiceChargedMovement(
-                    ref piece,
-                    pieceSettings,
-                    chargePower,
-                    chargeDistance);
-            }
-            else
-            {
-                ApplyMovementCommand(
-                    ref piece,
-                    pieceSettings,
-                    0f,
-                    commandLoudness);
-            }
+            ApplyVoiceChargedMovement(
+                ref piece,
+                pieceSettings,
+                chargePower: 1f,
+                chargeDistance: direction.magnitude);
         }
         else if (TryGetMovementHeadingOffset(command, out float movementHeadingOffset))
         {

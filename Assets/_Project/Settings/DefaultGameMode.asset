@@ -391,9 +391,9 @@ MonoBehaviour:
     minimumCommandReach: 1
     maximumCommandReach: 12
     voiceStartHoldSeconds: 0.08
-    voiceEndSilenceSeconds: 0.12
+    voiceEndSilenceSeconds: 0.3
     targetSwitchBoundarySilenceSeconds: 0.04
-    minimumTargetSwitchUtteranceSeconds: 0.3
+    minimumTargetSwitchUtteranceSeconds: 0.2
     maximumAutomaticUtteranceSeconds: 3
     noiseCalibrationSeconds: 1.5
     speechBoundaryAverageSeconds: 0.2

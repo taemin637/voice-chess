@@ -76,7 +76,6 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
     private readonly GameObject[,] spawnedPieces = new GameObject[8, 8];
     private readonly Dictionary<ushort, NetworkPieceVisual> networkPieceVisuals = new();
-    private readonly RaycastHit[] gazeRaycastHits = new RaycastHit[128];
 
     [Header("기물 프리팹")]
     [SerializeField] private ChessPiecePrefabSet whitePieces = new();
@@ -395,35 +394,24 @@ public sealed class ChessPieceSpawner : MonoBehaviour
         }
 
         Ray gazeRay = viewCamera.ScreenPointToRay(viewCamera.pixelRect.center);
-        int hitCount = Physics.RaycastNonAlloc(
-            gazeRay,
-            gazeRaycastHits,
-            viewCamera.farClipPlane,
-            Physics.DefaultRaycastLayers,
-            QueryTriggerInteraction.Collide);
-        float nearestPieceDistance = float.PositiveInfinity;
-        NetworkPieceVisual nearestVisual = null;
-
-        for (int hitIndex = 0; hitIndex < hitCount; hitIndex++)
+        if (!Physics.Raycast(
+                gazeRay,
+                out RaycastHit hit,
+                viewCamera.farClipPlane,
+                Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Collide) ||
+            hit.collider == null ||
+            !TryGetPieceVisual(
+                hit.collider.transform,
+                out ushort hitPieceId,
+                out NetworkPieceVisual hitVisual) ||
+            hitVisual.Team != team)
         {
-            RaycastHit hit = gazeRaycastHits[hitIndex];
-
-            if (hit.collider == null || hit.distance >= nearestPieceDistance ||
-                !TryGetPieceVisual(hit.collider.transform, out ushort hitPieceId,
-                    out NetworkPieceVisual hitVisual))
-            {
-                continue;
-            }
-
-            nearestPieceDistance = hit.distance;
-            pieceId = hitPieceId;
-            nearestVisual = hitVisual;
+            return false;
         }
 
-        // The closest piece blocks pieces behind it. An enemy under the reticle
-        // therefore clears the local selection instead of selecting an ally
-        // whose projected bounds happen to overlap the screen centre.
-        return nearestVisual != null && nearestVisual.Team == team;
+        pieceId = hitPieceId;
+        return true;
     }
 
     private bool TryGetPieceVisual(
@@ -931,25 +919,17 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
         List<Collider> selectionColliders = new();
 
-        foreach (Renderer pieceRenderer in visual.Renderers)
+        foreach (MeshFilter meshFilter in visual.Instance
+                     .GetComponentsInChildren<MeshFilter>(includeInactive: false))
         {
-            if (pieceRenderer == null)
+            if (meshFilter == null || meshFilter.sharedMesh == null)
             {
                 continue;
             }
 
-            Bounds localBounds = pieceRenderer.localBounds;
-
-            if (localBounds.size.sqrMagnitude <= 0.000001f)
-            {
-                continue;
-            }
-
-            BoxCollider selectionCollider =
-                pieceRenderer.gameObject.AddComponent<BoxCollider>();
-            selectionCollider.center = localBounds.center;
-            selectionCollider.size = localBounds.size;
-            selectionCollider.isTrigger = true;
+            MeshCollider selectionCollider =
+                meshFilter.gameObject.AddComponent<MeshCollider>();
+            selectionCollider.sharedMesh = meshFilter.sharedMesh;
             selectionColliders.Add(selectionCollider);
         }
 

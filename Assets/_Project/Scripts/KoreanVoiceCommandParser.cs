@@ -88,6 +88,39 @@ public static class KoreanVoiceCommandParser
         new("공격해 줘", PieceVoiceCommand.Charge)
     };
 
+    // Azure가 짧은 "돌진"/"공격" 발화를 반복적으로 다르게 받아쓴 사례입니다.
+    // 새 오인식 표현을 발견하면 아래 배열에 문자열 한 줄만 추가하세요.
+    // 이 표현은 문장 어디에 포함되어 있어도 돌진 명령으로 처리됩니다.
+    // Azure Phrase List에는 넣지 않고, 인식이 끝난 뒤 파서에서만 보정합니다.
+    private static readonly string[] ChargeMisrecognitionAliases =
+    {
+        // "돌진" 계열
+        "둘째",
+        "그진",
+        "그렇지",
+        "프로젝",
+        "여진",
+        "연장",
+        "지앤장",
+        "부진",
+        "요즘",
+        "돌격",
+        "돌째",
+        "돌찌",
+        "결제",
+        "이제",
+        "매직",
+        "라이젠",
+        "대신",
+        "돌",       // 돌, 돌려 등 첫 음절만 맞은 인식은 마지막에 넓게 보정
+
+        // "공격" 계열
+        "공룡",
+        "공연",
+        "공략",
+        "표적"
+    };
+
     private static readonly string[] SequenceConnectors =
     {
         "그리고 나서", "그 다음에", "그다음에", "그리고", "그 다음", "그다음", "다음에", "다음"
@@ -506,6 +539,25 @@ public static class KoreanVoiceCommandParser
                 "공격",
                 0.99f,
                 "공격 핵심어 감지");
+            return true;
+        }
+
+        foreach (string alias in ChargeMisrecognitionAliases)
+        {
+            string comparableAlias = MakeComparable(alias);
+
+            if (comparableAlias.Length == 0 ||
+                !text.Contains(comparableAlias, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            result = Accepted(
+                PieceVoiceCommand.Charge,
+                normalized,
+                alias,
+                0.9f,
+                $"등록된 돌진 오인식 표현 감지: {alias}");
             return true;
         }
 

@@ -318,7 +318,23 @@ public static class VoiceChargeBatchValidation
             "부진",
             "진진",
             "전진",
-            "후진"
+            "후진",
+            "돌",
+            "돌째",
+            "돌찌",
+            "둘째",
+            "그렇지?",
+            "그렇지.",
+            "그렇지!",
+            "그렇지,",
+            "여진",
+            "연장",
+            "지앤장",
+            "돌격",
+            "공룡",
+            "공연이 몇",
+            "이번에는 공략으로 들렸어",
+            "표적"
         };
 
         foreach (string example in acceptedExamples)

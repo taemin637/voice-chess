@@ -323,10 +323,15 @@ public sealed partial class NetworkChessGame
                 out _localChargeAimWorldPosition))
         {
             ClearLocalChargeAim();
+            ClearLocalVoiceChargePreview();
             return;
         }
 
         _localChargeAimValid = true;
+        UpdateLocalVoiceChargePreview(
+            voicedDurationSeconds: 0f,
+            normalizedLoudness: 0f,
+            pronunciationScore: 1f);
     }
 
     public bool TryGetCurrentLocalChargeAim(out Vector2 boardPosition)
@@ -361,24 +366,6 @@ public sealed partial class NetworkChessGame
             squareSize;
         float bestDistance = maximumDistance;
         bool found = false;
-
-        foreach (NetworkPlayer player in NetworkPlayer.Players)
-        {
-            if (player == null ||
-                !player.IsSpawned ||
-                player.IsEliminated ||
-                player.Team == PlayerTeam.Unassigned ||
-                player.Team == localTeam ||
-                !player.TryGetAvatarWorldBounds(out Bounds bounds) ||
-                bounds.Contains(viewRay.origin) ||
-                !TryUseRayBoundsHit(viewRay, bounds, ref bestDistance, out Vector3 hit))
-            {
-                continue;
-            }
-
-            worldPosition = hit;
-            found = true;
-        }
 
         Plane boardPlane = new(
             pieceSpawner.BoardUp,
@@ -453,26 +440,6 @@ public sealed partial class NetworkChessGame
         return true;
     }
 
-    private static bool TryUseRayBoundsHit(
-        Ray ray,
-        Bounds bounds,
-        ref float bestDistance,
-        out Vector3 hit)
-    {
-        hit = default;
-
-        if (!bounds.IntersectRay(ray, out float distance) ||
-            distance <= 0.001f ||
-            distance >= bestDistance)
-        {
-            return false;
-        }
-
-        bestDistance = distance;
-        hit = ray.GetPoint(distance);
-        return true;
-    }
-
     private void TryUseArenaWallHit(
         Ray ray,
         Vector3 point,
@@ -532,7 +499,6 @@ public sealed partial class NetworkChessGame
         CommandEconomySettings settings = gameMode?.Commands;
 
         if (settings == null ||
-            !settings.UsesVoiceChargeScaling ||
             !UsesChargeSelectionCommand ||
             _localConfirmedPieceIds.Count == 0)
         {
@@ -549,33 +515,31 @@ public sealed partial class NetworkChessGame
         }
 
         NetworkChessPieceState piece = _pieces[pieceIndex];
+        // Voice characteristics may still affect the command economy, but the
+        // selected piece's destination is always the current raycast aim point.
         _localVoiceChargePreviewCost = settings.CostSystemEnabled
             ? GetVoiceChargeCost(
                 piece.PieceType,
                 voicedDurationSeconds,
                 _localConfirmedPieceIds.Count)
             : 0f;
-        _localVoiceChargePreviewPower = settings.GetVoiceChargePower(
-            voicedDurationSeconds,
-            normalizedLoudness,
-            pronunciationScore);
-        _localVoiceChargePreviewDistance = GetVoiceChargeDistance(
-            piece,
-            _localVoiceChargePreviewPower);
-
         bool previewAimValid = useStoredAim || _localChargeAimValid;
         Vector2 previewAimBoardPosition = useStoredAim
             ? storedAimBoardPosition
             : _localChargeAimBoardPosition;
 
-        if (voicedDurationSeconds <= 0f ||
-            !previewAimValid ||
+        if (!previewAimValid ||
             pieceSpawner == null)
         {
             HideLocalVoiceChargeArrows();
             NetworkPlayer.LocalPlayer?.ClearLocalChargePreview();
             return;
         }
+
+        _localVoiceChargePreviewPower = 1f;
+        _localVoiceChargePreviewDistance = Vector2.Distance(
+            new Vector2(piece.BoardFile, piece.BoardRank),
+            previewAimBoardPosition);
 
         float squareSize = Mathf.Min(
             pieceSpawner.FileSpacing,
@@ -599,9 +563,9 @@ public sealed partial class NetworkChessGame
             }
 
             NetworkChessPieceState selectedPiece = _pieces[selectedPieceIndex];
-            float chargeDistance = GetVoiceChargeDistance(
-                selectedPiece,
-                _localVoiceChargePreviewPower);
+            float chargeDistance = Vector2.Distance(
+                new Vector2(selectedPiece.BoardFile, selectedPiece.BoardRank),
+                previewAimBoardPosition);
 
             if (!TryShowLocalVoiceChargeArrow(
                     visibleArrowCount,
@@ -813,9 +777,9 @@ public sealed partial class NetworkChessGame
                     piece.OwnerTeam)
                         ? settings.FriendlyVoiceChargeArrowColor
                         : settings.EnemyVoiceChargeArrowColor;
-                float chargeDistance = GetVoiceChargeDistance(
-                    piece,
-                    preview.ChargePower);
+                float chargeDistance = Vector2.Distance(
+                    new Vector2(piece.BoardFile, piece.BoardRank),
+                    preview.AimBoardPosition);
 
                 if (!TryConfigureVoiceChargeArrow(
                         arrow,

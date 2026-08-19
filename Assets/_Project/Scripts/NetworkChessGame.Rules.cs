@@ -1049,9 +1049,9 @@ public sealed partial class NetworkChessGame
             piece.OwnerTeam,
             piece.VoiceHeading);
         float launchSpeed = settings.FlickFriction > 0.0001f
-            ? Mathf.Sqrt(2f * settings.FlickFriction * Mathf.Max(0f, chargeDistance))
+            ? Mathf.Sqrt(2f * settings.FlickFriction * Mathf.Max(0f, chargeDistance)) +
+              settings.FlickFriction * Time.fixedDeltaTime
             : settings.GetFlickSpeed(chargePower);
-        launchSpeed = Mathf.Min(launchSpeed, settings.MaximumFlickSpeed);
         Vector2 velocity = direction * launchSpeed;
         piece.KnockbackFileVelocity = velocity.x;
         piece.KnockbackRankVelocity = velocity.y;

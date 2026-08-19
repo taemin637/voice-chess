@@ -45,7 +45,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
 
     [Header("자동 음성 감지")]
     [SerializeField, HideInInspector, Min(0.01f)] private float voiceStartHoldSeconds = 0.08f;
-    [SerializeField, HideInInspector, Min(0.01f)] private float voiceEndSilenceSeconds = 0.12f;
+    [SerializeField, HideInInspector, Min(0.01f)] private float voiceEndSilenceSeconds = 0.3f;
     [SerializeField, HideInInspector, Min(0f)] private float targetSwitchBoundarySilenceSeconds = 0.04f;
     [SerializeField, HideInInspector, Min(0f)] private float minimumTargetSwitchUtteranceSeconds = 0.3f;
     [SerializeField, HideInInspector, Min(0.1f)] private float maximumAutomaticUtteranceSeconds = 3f;
@@ -1430,7 +1430,6 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         }
 
         float finalChargeCost = 0f;
-        float finalChargePower = 0f;
         float finalChargeDistance = 0f;
         float finalPronunciationScore = outcome.TextSimilarityScore;
         CommandEconomySettings economy = _game?.GameMode?.Commands;
@@ -1454,10 +1453,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                 LoudCommandDecibels,
                 outcome.CommandLoudnessDecibels);
 
-            if (command == PieceVoiceCommand.Charge &&
-                economy != null &&
-                economy.UsesVoiceChargeScaling &&
-                _game != null)
+            if (command == PieceVoiceCommand.Charge && _game != null)
             {
                 _game.UpdateLocalVoiceChargePreview(
                     outcome.SpeechDurationSeconds,
@@ -1466,7 +1462,6 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                     hasCurrentChargeAim,
                     currentChargeAimBoardPosition);
                 finalChargeCost = _game.LocalVoiceChargePreviewCost;
-                finalChargePower = _game.LocalVoiceChargePreviewPower;
                 finalChargeDistance = _game.LocalVoiceChargePreviewDistance;
             }
 
@@ -1493,9 +1488,7 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
         }
 
         _game?.ClearLocalVoiceChargePreview();
-        bool usedVoiceCharge = outcome.Commands.Contains(PieceVoiceCommand.Charge) &&
-            economy != null &&
-            economy.UsesVoiceChargeScaling;
+        bool usedTargetedCharge = outcome.Commands.Contains(PieceVoiceCommand.Charge);
         string chargeRestriction = economy == null
             ? string.Empty
             : economy.CooldownSystemEnabled
@@ -1503,12 +1496,9 @@ public sealed class AzureKoreanSpeechInput : MonoBehaviour
                 : economy.CostSystemEnabled
                     ? $"코스트 {finalChargeCost:0.##}"
                     : "명령 제한 없음";
-        _status = usedVoiceCharge
+        _status = usedTargetedCharge
             ? $"“{outcome.Text}” → {commandName} · " +
-              $"발화 {outcome.SpeechDurationSeconds:F2}초 / " +
-              $"발음 {finalPronunciationScore:P0} / " +
-              $"세기 {finalChargePower:P0} / " +
-              $"예상 {finalChargeDistance:F1}칸 / {chargeRestriction}"
+              $"목표 {finalChargeDistance:F1}칸 / {chargeRestriction}"
             : $"“{outcome.Text}” → {commandName} ({outcome.Confidence:P0}) · " +
               $"음량 {outcome.CommandLoudnessDecibels:F1} dBFS / " +
               $"전달 {outcome.CommandReachInSquares:F1}칸";
