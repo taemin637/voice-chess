@@ -919,17 +919,28 @@ public sealed class ChessPieceSpawner : MonoBehaviour
 
         List<Collider> selectionColliders = new();
 
-        foreach (MeshFilter meshFilter in visual.Instance
-                     .GetComponentsInChildren<MeshFilter>(includeInactive: false))
+        // Imported meshes are not readable in a player build by default. Creating
+        // MeshColliders from them works in the Editor but fails in a build with
+        // "CollisionMeshData couldn't be created". A renderer-local box is
+        // sufficient for gaze selection and does not require CPU mesh data.
+        foreach (Renderer renderer in visual.Renderers)
         {
-            if (meshFilter == null || meshFilter.sharedMesh == null)
+            if (renderer == null)
             {
                 continue;
             }
 
-            MeshCollider selectionCollider =
-                meshFilter.gameObject.AddComponent<MeshCollider>();
-            selectionCollider.sharedMesh = meshFilter.sharedMesh;
+            Bounds localBounds = renderer.localBounds;
+
+            if (localBounds.size.sqrMagnitude <= Mathf.Epsilon)
+            {
+                continue;
+            }
+
+            BoxCollider selectionCollider =
+                renderer.gameObject.AddComponent<BoxCollider>();
+            selectionCollider.center = localBounds.center;
+            selectionCollider.size = localBounds.size;
             selectionColliders.Add(selectionCollider);
         }
 

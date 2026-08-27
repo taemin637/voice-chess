@@ -104,7 +104,7 @@ MonoBehaviour:
     useBoardKingPlacementAsPlayerStart: 1
     whitePlayerKingFallbackStart: {x: 4, y: 0}
     blackPlayerKingFallbackStart: {x: 4, y: 7}
-    playerKingEyeHeightAsModelFraction: 0.82
+    playerKingEyeHeightAsModelFraction: 0.85
     whitePlayerKingStartYaw: 0
     blackPlayerKingStartYaw: 180
     playerKingCollidesWithFriendlyPieces: 1
@@ -427,6 +427,6 @@ MonoBehaviour:
       height: 78
     pauseMenuKey: 60
   editorSoloTest:
-    enabled: 1
+    enabled: 0
     playerTeam: 1
     startupTimeoutSeconds: 10

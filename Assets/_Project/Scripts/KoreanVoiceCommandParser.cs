@@ -97,6 +97,9 @@ public static class KoreanVoiceCommandParser
         // "돌진" 계열
         "둘째",
         "그진",
+        "그젠",
+        "그러진",
+        "로젠",
         "그렇지",
         "프로젝",
         "여진",
