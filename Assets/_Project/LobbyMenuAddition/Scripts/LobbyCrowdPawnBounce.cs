@@ -171,37 +171,58 @@ public sealed class LobbyCrowdPawnBounce : MonoBehaviour
 
     private static Material CreateOutlineFreeMaterial(Material sourceMaterial)
     {
-        Material material = new(sourceMaterial);
-        material.name = sourceMaterial.name + " (Lobby No Outline)";
+        Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (unlitShader == null)
+        {
+            unlitShader = Shader.Find("Unlit/Color");
+        }
+
+        // These materials exist only while this lobby scene is running.  Using
+        // a shader with no outline pass avoids the Toon Shader's extra geometry
+        // pass without changing the imported pawn materials or any other scene.
+        Material material = unlitShader != null
+            ? new Material(unlitShader)
+            : new Material(sourceMaterial);
+        material.name = sourceMaterial.name + " (Lobby Crowd Unlit)";
 
         Color pieceColor = sourceMaterial.HasProperty("_BaseColor")
             ? sourceMaterial.GetColor("_BaseColor")
             : sourceMaterial.color;
 
-        if (material.HasProperty("_SPRDefaultUnlitColorMask"))
+        if (material.HasProperty("_BaseColor"))
         {
-            material.SetFloat("_SPRDefaultUnlitColorMask", 0f);
+            material.SetColor("_BaseColor", pieceColor);
         }
 
-        material.SetShaderPassEnabled("Outline", false);
-        material.SetShaderPassEnabled("SRPDefaultUnlit", false);
-        if (material.HasProperty("_Outline_Width"))
+        if (material.HasProperty("_Color"))
         {
-            material.SetFloat("_Outline_Width", 0f);
+            material.SetColor("_Color", pieceColor);
         }
 
-        if (material.HasProperty("_OutlineVisible"))
+        Texture sourceTexture = null;
+        if (sourceMaterial.HasProperty("_BaseMap"))
         {
-            material.SetFloat("_OutlineVisible", 0f);
+            sourceTexture = sourceMaterial.GetTexture("_BaseMap");
+        }
+        else if (sourceMaterial.HasProperty("_MainTex"))
+        {
+            sourceTexture = sourceMaterial.GetTexture("_MainTex");
         }
 
-        if (material.HasProperty("_Outline_Color"))
+        if (sourceTexture != null)
         {
-            material.SetColor("_Outline_Color", pieceColor);
+            if (material.HasProperty("_BaseMap"))
+            {
+                material.SetTexture("_BaseMap", sourceTexture);
+            }
+
+            if (material.HasProperty("_MainTex"))
+            {
+                material.SetTexture("_MainTex", sourceTexture);
+            }
         }
 
-        material.DisableKeyword("_OUTLINE_NML");
-        material.DisableKeyword("_OUTLINE_POS");
+        material.renderQueue = (int)RenderQueue.Geometry;
         return material;
     }
 

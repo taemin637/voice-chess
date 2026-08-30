@@ -10,6 +10,7 @@ public sealed class LobbyCreateServerKingDrop : MonoBehaviour
     [SerializeField] private GameObject menuRoot;
     [SerializeField] private Vector3 whiteLandingPosition = new(0.12f, 0.641f, 0.338f);
     [SerializeField] private Vector3 blackLandingPosition = new(0.12f, 0.641f, -0.36f);
+    [SerializeField] private float visualBaseYOffset;
     [SerializeField, Min(1f)] private float spawnHeight = 5.5f;
     [SerializeField, Min(0f)] private float whiteDelay = 0.2f;
     [SerializeField, Min(0f)] private float blackDelay = 0.48f;
@@ -22,7 +23,8 @@ public sealed class LobbyCreateServerKingDrop : MonoBehaviour
     private readonly List<Material> sceneMaterialInstances = new();
     private readonly List<GameObject> spawnedKings = new();
     private bool hasDropped;
-    private bool menuWasVisible;
+    private bool whiteDropStarted;
+    private bool blackDropStarted;
     private int expectedKingCount;
     private int settledKingCount;
 
@@ -31,26 +33,49 @@ public sealed class LobbyCreateServerKingDrop : MonoBehaviour
 
     private void Awake()
     {
-        menuWasVisible = menuRoot != null && menuRoot.activeInHierarchy;
-    }
-
-    private void Update()
-    {
-        if (hasDropped || menuRoot == null)
-        {
-            return;
-        }
-
-        bool menuIsVisible = menuRoot.activeInHierarchy;
-        if (menuWasVisible && !menuIsVisible)
-        {
-            DropKings();
-        }
-
-        menuWasVisible = menuIsVisible;
     }
 
     public void DropKings()
+    {
+        DropWhiteKingOnly();
+        DropBlackKing();
+    }
+
+    public void DropWhiteKingOnly()
+    {
+        PrepareDropSequence();
+
+        if (!whiteDropStarted && whiteKingPrefab != null)
+        {
+            whiteDropStarted = true;
+            expectedKingCount++;
+            StartCoroutine(DropKing(
+                whiteKingPrefab,
+                whiteLandingPosition,
+                whiteDelay,
+                "Lobby White King Drop",
+                1.04f));
+        }
+    }
+
+    public void DropBlackKing()
+    {
+        PrepareDropSequence();
+
+        if (!blackDropStarted && blackKingPrefab != null)
+        {
+            blackDropStarted = true;
+            expectedKingCount++;
+            StartCoroutine(DropKing(
+                blackKingPrefab,
+                blackLandingPosition,
+                blackDelay,
+                "Lobby Black King Drop",
+                0.92f));
+        }
+    }
+
+    private void PrepareDropSequence()
     {
         if (hasDropped)
         {
@@ -60,28 +85,6 @@ public sealed class LobbyCreateServerKingDrop : MonoBehaviour
         hasDropped = true;
         expectedKingCount = 0;
         settledKingCount = 0;
-
-        if (whiteKingPrefab != null)
-        {
-            expectedKingCount++;
-            StartCoroutine(DropKing(
-                whiteKingPrefab,
-                whiteLandingPosition,
-                whiteDelay,
-                "Lobby White King Drop",
-                1.04f));
-        }
-
-        if (blackKingPrefab != null)
-        {
-            expectedKingCount++;
-            StartCoroutine(DropKing(
-                blackKingPrefab,
-                blackLandingPosition,
-                blackDelay,
-                "Lobby Black King Drop",
-                0.92f));
-        }
     }
 
     private IEnumerator DropKing(
@@ -97,15 +100,30 @@ public sealed class LobbyCreateServerKingDrop : MonoBehaviour
         }
 
         Vector3 startPosition = landingPosition + Vector3.up * spawnHeight;
-        Quaternion uprightRotation = prefab.transform.rotation;
-        GameObject instance = Instantiate(prefab, startPosition, uprightRotation);
+        GameObject instance = new(instanceName);
+        instance.transform.SetPositionAndRotation(startPosition, Quaternion.identity);
         instance.name = instanceName;
         spawnedKings.Add(instance);
-        ReplaceWithOutlineFreeMaterials(instance);
+
+        GameObject visual = Instantiate(prefab, instance.transform, false);
+        visual.name = prefab.name + " Visual (Lobby Copy)";
+        visual.transform.localPosition = Vector3.zero;
+        visual.transform.localRotation = prefab.transform.localRotation;
+        visual.transform.localScale = prefab.transform.localScale;
 
         Transform kingTransform = instance.transform;
         Vector3 settledScale = kingTransform.localScale * scaleMultiplier;
         kingTransform.localScale = settledScale;
+        AlignVisualToLandingPivot(
+            visual,
+            kingTransform,
+            visualBaseYOffset);
+        ReplaceWithOutlineFreeMaterials(instance);
+        foreach (Renderer renderer in instance.GetComponentsInChildren<Renderer>(true))
+        {
+            renderer.enabled = true;
+            renderer.forceRenderingOff = false;
+        }
 
         float elapsed = 0f;
         while (elapsed < fallDuration)
@@ -147,6 +165,32 @@ public sealed class LobbyCreateServerKingDrop : MonoBehaviour
         settledKingCount++;
     }
 
+    private static void AlignVisualToLandingPivot(
+        GameObject visual,
+        Transform landingRoot,
+        float baseYOffset)
+    {
+        Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0)
+        {
+            return;
+        }
+
+        Bounds visualBounds = renderers[0].bounds;
+        for (int index = 1; index < renderers.Length; index++)
+        {
+            visualBounds.Encapsulate(renderers[index].bounds);
+        }
+
+        Vector3 desiredVisualBase = landingRoot.position +
+            Vector3.up * baseYOffset;
+        Vector3 currentVisualBase = new(
+            visualBounds.center.x,
+            visualBounds.min.y,
+            visualBounds.center.z);
+        visual.transform.position += desiredVisualBase - currentVisualBase;
+    }
+
     public void ResetKingsForMainMenu()
     {
         StopAllCoroutines();
@@ -163,7 +207,8 @@ public sealed class LobbyCreateServerKingDrop : MonoBehaviour
         expectedKingCount = 0;
         settledKingCount = 0;
         hasDropped = false;
-        menuWasVisible = menuRoot != null && menuRoot.activeInHierarchy;
+        whiteDropStarted = false;
+        blackDropStarted = false;
     }
 
     private void PlayImpact(GameObject king, float pitch)
@@ -249,18 +294,23 @@ public sealed class LobbyCreateServerKingDrop : MonoBehaviour
     {
         Material material = new(sourceMaterial);
         material.name = sourceMaterial.name + " (Lobby No Outline)";
+        bool isKingTestMaterial = sourceMaterial.name.Contains("KingTest");
 
         Color pieceColor = sourceMaterial.HasProperty("_BaseColor")
             ? sourceMaterial.GetColor("_BaseColor")
             : sourceMaterial.color;
 
-        if (material.HasProperty("_SPRDefaultUnlitColorMask"))
+        if (!isKingTestMaterial)
         {
-            material.SetFloat("_SPRDefaultUnlitColorMask", 0f);
+            if (material.HasProperty("_SPRDefaultUnlitColorMask"))
+            {
+                material.SetFloat("_SPRDefaultUnlitColorMask", 0f);
+            }
+
+            material.SetShaderPassEnabled("Outline", false);
+            material.SetShaderPassEnabled("SRPDefaultUnlit", false);
         }
 
-        material.SetShaderPassEnabled("Outline", false);
-        material.SetShaderPassEnabled("SRPDefaultUnlit", false);
         if (material.HasProperty("_Outline_Width"))
         {
             material.SetFloat("_Outline_Width", 0f);

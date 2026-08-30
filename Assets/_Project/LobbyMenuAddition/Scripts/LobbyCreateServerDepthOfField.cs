@@ -15,8 +15,10 @@ public sealed class LobbyCreateServerDepthOfField : MonoBehaviour
 
     private Volume depthOfFieldVolume;
     private VolumeProfile runtimeProfile;
+    private DepthOfField runtimeDepthOfField;
     private bool menuWasVisible;
     private bool blurIsActive;
+    private bool automaticActivationIsSuppressed;
     private float activationTime;
 
     private void Awake()
@@ -30,7 +32,8 @@ public sealed class LobbyCreateServerDepthOfField : MonoBehaviour
         if (!blurIsActive && menuRoot != null)
         {
             bool menuIsVisible = menuRoot.activeInHierarchy;
-            if (menuWasVisible && !menuIsVisible)
+            if (!automaticActivationIsSuppressed &&
+                menuWasVisible && !menuIsVisible)
             {
                 ActivateBackgroundBlur();
             }
@@ -50,6 +53,9 @@ public sealed class LobbyCreateServerDepthOfField : MonoBehaviour
 
     public void ActivateBackgroundBlur()
     {
+        automaticActivationIsSuppressed = false;
+        ApplyBlurDistances(blurStartDistance, blurEndDistance, maximumBlurRadius);
+
         if (blurIsActive)
         {
             return;
@@ -69,6 +75,36 @@ public sealed class LobbyCreateServerDepthOfField : MonoBehaviour
         }
     }
 
+    public void ActivateFullBackgroundBlur()
+    {
+        automaticActivationIsSuppressed = false;
+        ApplyBlurDistances(0.05f, 0.55f, 1.25f);
+        blurIsActive = true;
+        activationTime = Time.unscaledTime - startDelay;
+
+        if (targetCamera != null)
+        {
+            UniversalAdditionalCameraData cameraData =
+                targetCamera.GetComponent<UniversalAdditionalCameraData>();
+            if (cameraData != null)
+            {
+                cameraData.renderPostProcessing = true;
+            }
+        }
+    }
+
+    private void ApplyBlurDistances(float start, float end, float radius)
+    {
+        if (runtimeDepthOfField == null)
+        {
+            return;
+        }
+
+        runtimeDepthOfField.gaussianStart.Override(start);
+        runtimeDepthOfField.gaussianEnd.Override(Mathf.Max(start + 0.01f, end));
+        runtimeDepthOfField.gaussianMaxRadius.Override(radius);
+    }
+
     public void DeactivateBackgroundBlur()
     {
         blurIsActive = false;
@@ -78,6 +114,12 @@ public sealed class LobbyCreateServerDepthOfField : MonoBehaviour
         {
             depthOfFieldVolume.weight = 0f;
         }
+    }
+
+    public void SuppressAutomaticActivation()
+    {
+        DeactivateBackgroundBlur();
+        automaticActivationIsSuppressed = true;
     }
 
     private void CreateDepthOfFieldVolume()
@@ -90,12 +132,12 @@ public sealed class LobbyCreateServerDepthOfField : MonoBehaviour
         runtimeProfile = ScriptableObject.CreateInstance<VolumeProfile>();
         runtimeProfile.hideFlags = HideFlags.DontSave;
 
-        DepthOfField depthOfField = runtimeProfile.Add<DepthOfField>(true);
-        depthOfField.mode.Override(DepthOfFieldMode.Gaussian);
-        depthOfField.gaussianStart.Override(blurStartDistance);
-        depthOfField.gaussianEnd.Override(blurEndDistance);
-        depthOfField.gaussianMaxRadius.Override(maximumBlurRadius);
-        depthOfField.highQualitySampling.Override(true);
+        runtimeDepthOfField = runtimeProfile.Add<DepthOfField>(true);
+        runtimeDepthOfField.mode.Override(DepthOfFieldMode.Gaussian);
+        runtimeDepthOfField.gaussianStart.Override(blurStartDistance);
+        runtimeDepthOfField.gaussianEnd.Override(blurEndDistance);
+        runtimeDepthOfField.gaussianMaxRadius.Override(maximumBlurRadius);
+        runtimeDepthOfField.highQualitySampling.Override(true);
 
         depthOfFieldVolume.profile = runtimeProfile;
     }

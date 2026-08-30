@@ -1647,6 +1647,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LobbyCreateServerCameraTransition
   targetCamera: {fileID: 474957367}
   createServerButton: {fileID: 1677530028}
+  joinServerButton: {fileID: 534582613}
   destination: {fileID: 9072608260000002}
   menuObjectsToHide:
   - {fileID: 1979531841}
@@ -1704,11 +1705,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bb792218de034d85a2eb45a50ca488ea, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LobbyCreateServerKingDrop
-  whiteKingPrefab: {fileID: 919132149155446097, guid: 3e5a738646aa87c40954abc295886aa5, type: 3}
-  blackKingPrefab: {fileID: 919132149155446097, guid: 7a3a7f6e0835fe045bd6737edfb36f37, type: 3}
+  whiteKingPrefab: {fileID: 6329351824637616340, guid: 7b3d9a8f2e5c41b6a0f1428d9e73c501, type: 3}
+  blackKingPrefab: {fileID: 3635523174796848706, guid: 6a2c8f7e1d4b43a9b5e0317c8d62f490, type: 3}
   menuRoot: {fileID: 1979531841}
   whiteLandingPosition: {x: 0.12, y: 0.5, z: 0.338}
   blackLandingPosition: {x: 0.12, y: 0.5, z: -0.36}
+  visualBaseYOffset: 0
   spawnHeight: 5.5
   whiteDelay: 0.2
   blackDelay: 0.48
@@ -2163,6 +2165,8 @@ GameObject:
   - component: {fileID: 9072608261000202}
   - component: {fileID: 9072608261000203}
   - component: {fileID: 9072608261000204}
+  - component: {fileID: 9072608261000205}
+  - component: {fileID: 9072608261000206}
   m_Layer: 0
   m_Name: Lobby Crowd Pawn Bounce Controller
   m_TagString: Untagged
@@ -2249,6 +2253,40 @@ MonoBehaviour:
   signSize: {x: 0.045, y: 0.14, z: 0.44}
   ropeLength: 0.38
   clickImpulse: 3.6
+--- !u!114 &9072608261000205
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9072608261000200}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4f6b8a2c1d734e75a91c03e8b42f6d10, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Assembly-CSharp::LobbyJoinServerFlow
+  cameraTransition: {fileID: 9072608260000005}
+  depthOfFieldController: {fileID: 9072608261000203}
+  kingDropController: {fileID: 9072608260000006}
+  sideSignsController: {fileID: 9072608261000204}
+--- !u!114 &9072608261000206
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9072608261000200}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b1f4c8e27d6a49db9342a75f8c16e043, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Assembly-CSharp::LobbySettingsPanel
+  targetCamera: {fileID: 474957367}
+  settingsButton: {fileID: 70444077}
+  menuObjectsToHide:
+  - {fileID: 1979531841}
+  - {fileID: 320523728}
+  depthOfFieldController: {fileID: 9072608261000203}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

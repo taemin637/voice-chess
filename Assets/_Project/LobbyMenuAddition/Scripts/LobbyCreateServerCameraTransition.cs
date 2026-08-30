@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.InputSystem;
@@ -7,6 +8,7 @@ public sealed class LobbyCreateServerCameraTransition : MonoBehaviour
 {
     [SerializeField] private Camera targetCamera;
     [SerializeField] private Transform createServerButton;
+    [SerializeField] private Transform joinServerButton;
     [SerializeField] private Transform destination;
     [SerializeField] private GameObject[] menuObjectsToHide;
     [SerializeField, Min(0.01f)] private float duration = 1.2f;
@@ -24,6 +26,10 @@ public sealed class LobbyCreateServerCameraTransition : MonoBehaviour
     private bool isMoving;
     private bool hasFinished;
     private bool isReturning;
+    private bool isJoinServerTransition;
+
+    public event Action JoinServerTransitionStarted;
+    public event Action JoinServerViewReached;
 
     private void Update()
     {
@@ -101,14 +107,20 @@ public sealed class LobbyCreateServerCameraTransition : MonoBehaviour
 
     private void TryBeginTransition(Vector2 screenPosition)
     {
-        if (targetCamera == null || createServerButton == null || destination == null)
+        if (targetCamera == null || destination == null)
         {
             return;
         }
 
         Ray ray = targetCamera.ScreenPointToRay(screenPosition);
-        if (!Physics.Raycast(ray, out RaycastHit hit) ||
-            (hit.transform != createServerButton && !hit.transform.IsChildOf(createServerButton)))
+        if (!Physics.Raycast(ray, out RaycastHit hit))
+        {
+            return;
+        }
+
+        bool hitCreateButton = IsButtonHit(hit.transform, createServerButton);
+        bool hitJoinButton = IsButtonHit(hit.transform, joinServerButton);
+        if (!hitCreateButton && !hitJoinButton)
         {
             return;
         }
@@ -121,6 +133,7 @@ public sealed class LobbyCreateServerCameraTransition : MonoBehaviour
         transitionStartFieldOfView = startFieldOfView;
         elapsed = 0f;
         isReturning = false;
+        isJoinServerTransition = hitJoinButton;
         isMoving = true;
 
         if (menuObjectsToHide != null)
@@ -134,7 +147,20 @@ public sealed class LobbyCreateServerCameraTransition : MonoBehaviour
             }
         }
 
-        onCreateServerClicked.Invoke();
+        if (isJoinServerTransition)
+        {
+            JoinServerTransitionStarted?.Invoke();
+        }
+        else
+        {
+            onCreateServerClicked.Invoke();
+        }
+    }
+
+    private static bool IsButtonHit(Transform hitTransform, Transform button)
+    {
+        return button != null &&
+            (hitTransform == button || hitTransform.IsChildOf(button));
     }
 
     private void MoveCamera()
@@ -194,5 +220,9 @@ public sealed class LobbyCreateServerCameraTransition : MonoBehaviour
         }
 
         hasFinished = true;
+        if (isJoinServerTransition)
+        {
+            JoinServerViewReached?.Invoke();
+        }
     }
 }

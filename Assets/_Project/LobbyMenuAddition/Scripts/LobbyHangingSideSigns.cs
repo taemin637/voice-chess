@@ -32,9 +32,12 @@ public sealed class LobbyHangingSideSigns : MonoBehaviour
     private Material ropeMaterial;
     private bool signsAreVisible;
     private bool isReturningToMainMenu;
+    private bool whiteSelectionLocked;
     private Transform selectedKing;
+    private Transform lockedWhiteKing;
     private Coroutine kingSelectionRoutine;
     private Coroutine revealSignsRoutine;
+    private Coroutine joinedServerSelectionRoutine;
     private int selectionRequestId;
     private RectTransform backButtonRect;
 
@@ -118,15 +121,36 @@ public sealed class LobbyHangingSideSigns : MonoBehaviour
 
         if (whiteSignByBody.TryGetValue(hitBody, out bool isWhiteSign))
         {
-            selectionRequestId++;
-            if (kingSelectionRoutine != null)
+            if (isWhiteSign && whiteSelectionLocked)
             {
-                StopCoroutine(kingSelectionRoutine);
+                return;
             }
 
-            kingSelectionRoutine = StartCoroutine(
-                SelectKingWhenReady(isWhiteSign, selectionRequestId));
+            BeginKingSelection(isWhiteSign);
         }
+    }
+
+    public void ConfigureJoinedServerWithWhiteHost()
+    {
+        whiteSelectionLocked = true;
+        if (joinedServerSelectionRoutine != null)
+        {
+            StopCoroutine(joinedServerSelectionRoutine);
+        }
+
+        joinedServerSelectionRoutine = StartCoroutine(LockWhiteWhenReady());
+    }
+
+    private void BeginKingSelection(bool selectWhiteKing)
+    {
+        selectionRequestId++;
+        if (kingSelectionRoutine != null)
+        {
+            StopCoroutine(kingSelectionRoutine);
+        }
+
+        kingSelectionRoutine = StartCoroutine(
+            SelectKingWhenReady(selectWhiteKing, selectionRequestId));
     }
 
     private void LateUpdate()
@@ -269,6 +293,26 @@ public sealed class LobbyHangingSideSigns : MonoBehaviour
             revealSignsRoutine = null;
         }
 
+        if (joinedServerSelectionRoutine != null)
+        {
+            StopCoroutine(joinedServerSelectionRoutine);
+            joinedServerSelectionRoutine = null;
+        }
+
+        whiteSelectionLocked = false;
+        if (lockedWhiteKing != null)
+        {
+            if (kingRestPositions.TryGetValue(
+                    lockedWhiteKing,
+                    out Vector3 lockedRestPosition))
+            {
+                lockedWhiteKing.position = lockedRestPosition;
+            }
+
+            SetKingOutline(lockedWhiteKing, false);
+            lockedWhiteKing = null;
+        }
+
         if (selectedKing != null)
         {
             if (kingRestPositions.TryGetValue(selectedKing, out Vector3 restPosition))
@@ -294,11 +338,52 @@ public sealed class LobbyHangingSideSigns : MonoBehaviour
         runtimeRoot.SetActive(false);
     }
 
-    private IEnumerator RevealSignsAfterKingsLand()
+    private IEnumerator LockWhiteWhenReady()
     {
-        float timeoutAt = Time.unscaledTime + 4f;
+        float timeoutAt = Time.unscaledTime + 3f;
+        Transform whiteKing = null;
 
         while (Time.unscaledTime < timeoutAt)
+        {
+            whiteKing = FindSceneObject("Lobby White King Drop");
+            if (whiteKing != null && kingDropController != null &&
+                kingDropController.KingsHaveSettled)
+            {
+                break;
+            }
+
+            yield return null;
+        }
+
+        if (whiteKing == null || !whiteSelectionLocked)
+        {
+            joinedServerSelectionRoutine = null;
+            yield break;
+        }
+
+        if (!kingRestPositions.TryGetValue(whiteKing, out Vector3 whiteRestPosition))
+        {
+            whiteRestPosition = new Vector3(
+                whiteKing.position.x,
+                0.5f,
+                whiteKing.position.z);
+            kingRestPositions[whiteKing] = whiteRestPosition;
+        }
+
+        lockedWhiteKing = whiteKing;
+        lockedWhiteKing.position = whiteRestPosition + Vector3.up * 0.13f;
+        SetKingOutline(
+            lockedWhiteKing,
+            true,
+            new Color(0.72f, 0.25f, 0.2f, 1f),
+            0.0045f);
+
+        joinedServerSelectionRoutine = null;
+    }
+
+    private IEnumerator RevealSignsAfterKingsLand()
+    {
+        while (true)
         {
             if (isReturningToMainMenu ||
                 (menuRoot != null && menuRoot.activeInHierarchy))
@@ -567,7 +652,10 @@ public sealed class LobbyHangingSideSigns : MonoBehaviour
         while (Time.unscaledTime < timeoutAt && requestId == selectionRequestId)
         {
             targetKing = FindSceneObject(kingName);
-            if (targetKing != null && targetKing.position.y <= 0.53f)
+            bool kingsAreReady = kingDropController == null ||
+                kingDropController.KingsHaveSettled;
+            if (targetKing != null && kingsAreReady &&
+                targetKing.position.y <= 0.53f)
             {
                 break;
             }
@@ -666,9 +754,14 @@ public sealed class LobbyHangingSideSigns : MonoBehaviour
         return null;
     }
 
-    private static void SetKingOutline(Transform king, bool isHighlighted)
+    private static void SetKingOutline(
+        Transform king,
+        bool isHighlighted,
+        Color? outlineColor = null,
+        float outlineWidth = 0.006f)
     {
-        Color highlightColor = new(1f, 0.72f, 0.12f, 1f);
+        Color highlightColor = outlineColor ??
+            new Color(1f, 0.72f, 0.12f, 1f);
 
         foreach (Renderer targetRenderer in
                  king.GetComponentsInChildren<Renderer>(true))
@@ -681,16 +774,27 @@ public sealed class LobbyHangingSideSigns : MonoBehaviour
                     continue;
                 }
 
-                material.SetShaderPassEnabled("Outline", isHighlighted);
-                material.SetShaderPassEnabled("SRPDefaultUnlit", isHighlighted);
-                material.SetFloat("_Outline_Width", isHighlighted ? 0.006f : 0f);
+                bool isKingTestMaterial = material.name.Contains("KingTest");
+
+                if (!isKingTestMaterial)
+                {
+                    material.SetShaderPassEnabled("Outline", isHighlighted);
+                    material.SetShaderPassEnabled(
+                        "SRPDefaultUnlit",
+                        isHighlighted);
+                }
+
+                material.SetFloat(
+                    "_Outline_Width",
+                    isHighlighted ? outlineWidth : 0f);
 
                 if (material.HasProperty("_OutlineVisible"))
                 {
                     material.SetFloat("_OutlineVisible", isHighlighted ? 1f : 0f);
                 }
 
-                if (material.HasProperty("_SPRDefaultUnlitColorMask"))
+                if (!isKingTestMaterial &&
+                    material.HasProperty("_SPRDefaultUnlitColorMask"))
                 {
                     material.SetFloat(
                         "_SPRDefaultUnlitColorMask",
